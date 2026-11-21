@@ -1076,7 +1076,7 @@ void Game::spawn_barbarians(bool force_sea, bool force_land)
     const bool forced = force_sea || force_land;
     if (!forced) {
         if (turn < 50) return;
-        const double p = 0.03 + 0.01 * static_cast<int>(difficulty);
+        const double p = 0.015 + 0.005 * static_cast<int>(difficulty);
         if (!rng.chance(p)) return;
     }
     int known = 0;
@@ -1763,6 +1763,20 @@ void Game::capture_city(City &c, int new_owner)
     const int plunder = total > 0 ? civs[old].gold * c.size / total : 0;
     civs[old].gold -= plunder;
     civs[new_owner].gold += plunder;
+    if (civs[new_owner].barbarian && c.size <= 2 && !c.has(Building::Palace) && wonders_in(c) == 0) {
+        // Raiders sack a small town and burn it rather than hold it.
+        const int id = c.id;
+        const std::string name = c.name;
+        const int cx = c.x, cy = c.y;
+        std::vector<int> drop;
+        for (const Unit &u : units) {
+            if (u.home == id) drop.push_back(u.id);
+        }
+        for (int uid : drop) kill_unit(uid);
+        say(old, MsgKind::Bad, "Barbarians sack " + name + " and burn it to the ground! They carry off " + std::to_string(plunder) + " gold.", cx, cy);
+        cities.erase(std::remove_if(cities.begin(), cities.end(), [id](const City &o) { return o.id == id; }), cities.end());
+        return;
+    }
     if (c.has(Building::Palace) && (civs[old].structurals || civs[old].components || civs[old].modules)) {
         // The capital falls: the spaceship is lost, on the pad or in flight.
         lose_spaceship(old, civs[old].launch_turn >= 0);

@@ -176,6 +176,11 @@ void Game::ai_city(City &c)
         {Building::MassTransit, c.size >= 12},
         {Building::RecyclingCenter, c.size >= 12},
     };
+    // Core buildings still wanted here come before wonders, caravans and
+    // spaceship parts most of the time.
+    bool pending = false;
+    for (const Want &w : wants) pending |= w.ok && can_build(c, false, static_cast<int>(w.b));
+    const bool spare = !pending || rng.chance(0.25);
     // Envoys: a Diplomat for embassies (and theft in wartime), Caravans to
     // speed up our wonders or open trade routes.
     {
@@ -203,14 +208,14 @@ void Game::ai_city(City &c)
                 wonder_near = true;
         }
         if (can_build(c, true, static_cast<int>(UnitType::Caravan)) && caravans < 1 + own_cities / 4 && c.size >= 4 &&
-            st.shield_surplus >= 3 && !front && ((wonder_near && rng.chance(0.3)) || (static_cast<int>(c.routes.size()) < kMaxRoutes && st.raw.trade >= 5 && rng.chance(0.08)))) {
+            st.shield_surplus >= 3 && !front && spare && ((wonder_near && rng.chance(0.3)) || (static_cast<int>(c.routes.size()) < kMaxRoutes && st.raw.trade >= 5 && rng.chance(0.08)))) {
             pick(true, static_cast<int>(UnitType::Caravan));
             return;
         }
     }
     // The space race: once the Apollo Program stands, big productive cities
     // build a modest, complete spaceship and the capital launches it.
-    if (space_open() && c.size >= 6 && st.shield_surplus >= 6 && !front && civs[ci].launch_turn < 0) {
+    if (space_open() && c.size >= 6 && st.shield_surplus >= 6 && !front && spare && civs[ci].launch_turn < 0) {
         const Civ &cv = civs[ci];
         const int want_modules = difficulty >= Difficulty::King ? 6 : 3;
         const int want_components = difficulty >= Difficulty::King ? 6 : 4;
@@ -238,7 +243,7 @@ void Game::ai_city(City &c)
     }
     // A productive city with the basics takes on a Wonder of the World now
     // and then, one or two at a time per civilization.
-    if (c.size >= 5 && st.shield_surplus >= 4 && c.has(Building::Temple) && !front) {
+    if (c.size >= 5 && st.shield_surplus >= 4 && c.has(Building::Temple) && !front && spare) {
         int in_progress = 0;
         std::uint32_t taken = 0;
         for (const City &o : cities) {
@@ -826,13 +831,12 @@ void Game::ai_play(int ci)
     // Rush a defender into a weakly held city with enemies (or raiders) close.
     for (City &ct : cities) {
         if (ct.owner != ci) continue;
-        int guards = 0;
-        bool threat = false;
+        int guards = 0, threats = 0;
         for (const Unit &u : units) {
             guards += u.owner == ci && u.x == ct.x && u.y == ct.y && is_military(u.type);
-            threat |= at_war(ci, u.owner) && is_military(u.type) && map.distance(u.x, u.y, ct.x, ct.y) <= 3;
+            threats += at_war(ci, u.owner) && is_military(u.type) && unit_info(u.type).attack > 0 && map.distance(u.x, u.y, ct.x, ct.y) <= 2;
         }
-        if (!threat || guards >= 2) continue;
+        if (threats == 0 || guards >= 2 || (guards == 1 && threats < 2)) continue;
         if (!ct.build_unit || unit_info(ct.build).defense < 2) {
             int best = -1;
             for (int u = 0; u < kUnitTypeCount; ++u) {
