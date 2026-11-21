@@ -241,6 +241,11 @@ int Game::cargo_count(int ship_id) const
 
 void Game::say(int civ, MsgKind kind, const std::string &text, int x, int y)
 {
+    if (text.size() >= 2 && text.compare(text.size() - 2, 2, "..") == 0 && (text.size() < 3 || text[text.size() - 3] != '.')) {
+        // "builds Mech. Inf.." -- one full stop is enough.
+        say(civ, kind, text.substr(0, text.size() - 1), x, y);
+        return;
+    }
     Message m;
     m.civ = civ;
     m.kind = kind;
@@ -467,6 +472,16 @@ bool Game::can_build(const City &c, bool is_unit, int what) const
         const WonderInfo &wi = wonder_info(w);
         if (wonder_built(w) || !has(c.owner, wi.tech)) return false;
         return wi.obsolete == Advance::None || !has(c.owner, wi.obsolete);
+    }
+    if (is_space_build(what)) {
+        const Civ &cv = civs[c.owner];
+        if (!space_open() || cv.launch_turn >= 0 || !has(c.owner, building_info(what).tech)) return false;
+        switch (static_cast<SpacePart>(what - kSpaceBase)) {
+        case SpacePart::Structural: return cv.structurals < kMaxStructurals;
+        case SpacePart::Component: return cv.components < kMaxComponents;
+        case SpacePart::Module: return cv.modules < kMaxModules;
+        default: return false;
+        }
     }
     if (what < 0 || what >= kBuildingCount) return false;
     const Building b = static_cast<Building>(what);
@@ -799,6 +814,93 @@ int Game::polluted_squares() const
 }
 
 int Game::pollution_chance(const City &c) const { return c.stats.pollution; }
+
+// ---------------------------------------------------------------- space race
+
+bool Game::space_open() const { return wonder_built(Wonder::Apollo); }
+
+SpaceStats Game::space_stats(int ci) const
+{
+    SpaceStats s;
+    const Civ &c = civs[ci];
+    s.fuel = (c.components + 1) / 2;
+    s.propulsion = c.components / 2;
+    s.pairs = std::min(s.fuel, s.propulsion);
+    s.habitation = (c.modules + 2) / 3;
+    s.life_support = (c.modules + 1) / 3;
+    s.solar = c.modules / 3;
+    s.unsupported = std::max(0, c.components + c.modules - c.structurals);
+    s.population = s.habitation * 10000;
+    s.life_pct = s.habitation ? std::min(100, s.life_support * 100 / s.habitation) : 0;
+    const int need = s.habitation + s.life_support;
+    s.energy_pct = need ? std::min(100, s.solar * 2 * 100 / need) : 0;
+    s.success_pct = s.life_pct * s.energy_pct / 100;
+    s.mass = 400 * c.structurals + 800 * c.components + 1600 * c.modules;
+    const int units = c.structurals + 2 * c.components + 4 * c.modules;
+    s.years = s.pairs ? 4.0 + 0.6 * units / s.pairs : 0;
+    s.viable = s.pairs >= 1 && s.habitation >= 1 && s.life_support >= 1 && s.solar >= 1 && s.unsupported == 0;
+    return s;
+}
+
+bool Game::can_launch(int ci) const
+{
+    const Civ &c = civs[ci];
+    bool palace = false;
+    for (const City &o : cities) palace |= o.owner == ci && o.has(Building::Palace);
+    return c.alive && c.launch_turn < 0 && space_open() && palace && space_stats(ci).viable;
+}
+
+bool Game::launch(int ci)
+{
+    if (!can_launch(ci)) return false;
+    Civ &c = civs[ci];
+    const SpaceStats s = space_stats(ci);
+    const int target = year_for_turn(turn) + static_cast<int>(std::ceil(s.years));
+    int t = turn + 1;
+    while (year_for_turn(t) < target) ++t;
+    c.launch_turn = turn;
+    c.arrival_turn = t;
+    const City *cap = capital(ci);
+    const std::string news = "The " + c.name + " launch a spaceship from " + (cap ? cap->name : std::string("their capital")) +
+                             "! It will reach Alpha Centauri in " + year_text(year_for_turn(t)) + ".";
+    for (int o = 0; o < static_cast<int>(civs.size()); ++o) {
+        if (civs[o].alive && !civs[o].barbarian) say(o, o == ci ? MsgKind::Good : MsgKind::Bad, news, cap ? cap->x : -1, cap ? cap->y : -1);
+    }
+    return true;
+}
+
+int Game::arrival_year(int ci) const
+{
+    return civs[ci].arrival_turn >= 0 ? year_for_turn(civs[ci].arrival_turn) : -1;
+}
+
+void Game::lose_spaceship(int ci, bool in_flight)
+{
+    Civ &c = civs[ci];
+    c.structurals = c.components = c.modules = 0;
+    c.launch_turn = c.arrival_turn = -1;
+    say(-1, MsgKind::Bad, in_flight ? "With their capital lost, the " + c.name + "' spaceship is lost in space."
+                                    : "With their capital lost, the " + c.name + "' spaceship is destroyed on the pad.");
+}
+
+void Game::space_arrivals()
+{
+    if (winner >= 0) return;
+    for (int ci = 0; ci < static_cast<int>(civs.size()); ++ci) {
+        Civ &c = civs[ci];
+        if (c.arrival_turn < 0 || turn < c.arrival_turn || !c.alive) continue;
+        const SpaceStats s = space_stats(ci);
+        if (rng.below(100) < s.success_pct) {
+            winner = ci;
+            space_win = true;
+            say(-1, MsgKind::Good, "The " + c.name + "' colonists reach Alpha Centauri! A new world begins.");
+            return;
+        }
+        say(-1, MsgKind::Bad, "The " + c.name + "' spaceship is lost on the way to Alpha Centauri.");
+        c.structurals = c.components = c.modules = 0;
+        c.launch_turn = c.arrival_turn = -1;
+    }
+}
 
 int Game::warming_risk() const { return std::min(100, warming * 100 / kWarmingThreshold); }
 
@@ -1661,6 +1763,10 @@ void Game::capture_city(City &c, int new_owner)
     const int plunder = total > 0 ? civs[old].gold * c.size / total : 0;
     civs[old].gold -= plunder;
     civs[new_owner].gold += plunder;
+    if (c.has(Building::Palace) && (civs[old].structurals || civs[old].components || civs[old].modules)) {
+        // The capital falls: the spaceship is lost, on the pad or in flight.
+        lose_spaceship(old, civs[old].launch_turn >= 0);
+    }
     c.remove(Building::Palace);
     c.owner = new_owner;
     c.manual = false;
@@ -2282,6 +2388,34 @@ void Game::process_city(City &c, bool &learned_any)
                 c.shields -= cost;
                 say(c.owner, MsgKind::City, c.name + " builds " + unit_info(t).name + ".", c.x, c.y);
             }
+        } else if (is_space_build(c.build)) {
+            c.shields -= cost;
+            const SpacePart part = static_cast<SpacePart>(c.build - kSpaceBase);
+            std::string what = building_info(c.build).name;
+            if (part == SpacePart::Structural) {
+                ++civ.structurals;
+            } else if (part == SpacePart::Component) {
+                what = civ.components % 2 == 0 ? "SS Component (fuel)" : "SS Component (propulsion)";
+                ++civ.components;
+            } else {
+                static const char *kinds[] = {"habitation", "life support", "solar panels"};
+                what = std::string("SS Module (") + kinds[civ.modules % 3] + ")";
+                ++civ.modules;
+            }
+            say(c.owner, MsgKind::City, c.name + " builds " + what + ".", c.x, c.y);
+            if (!can_build(c, false, c.build)) {
+                // That part is full: on to the next one, or back to troops.
+                int next = -1;
+                for (int k = 0; k < kSpacePartCount && next < 0; ++k) {
+                    if (can_build(c, false, kSpaceBase + k)) next = kSpaceBase + k;
+                }
+                if (next >= 0) {
+                    c.build = next;
+                } else {
+                    c.build_unit = true;
+                    c.build = static_cast<int>(unit_available(c.owner, UnitType::Musketeers) ? UnitType::Musketeers : UnitType::Phalanx);
+                }
+            }
         } else if (is_wonder_build(c.build)) {
             c.shields -= cost;
             complete_wonder(c, static_cast<Wonder>(c.build - kWonderBase));
@@ -2509,6 +2643,7 @@ void Game::new_turn()
         warming = std::max(0, warming - 10);
     }
     if (warming >= kWarmingThreshold) global_warming();
+    space_arrivals();
     check_elimination();
     refresh_visibility();
 }

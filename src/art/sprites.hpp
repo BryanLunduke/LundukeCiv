@@ -57,6 +57,14 @@ int tiny_width(const std::string &text);
 // A Wonder of the World as a framed 32x32 plaque (wonders.cpp).
 Pixmap wonder_icon(int wonder);
 
+// The spaceship blueprint (space.cpp): frame sections, fuel/engine pairs
+// and modules in build order; empty slots dashed; engines firing in flight.
+Pixmap spaceship(int structurals, int components, int modules, bool firing);
+int spaceship_width();
+int spaceship_height();
+// 32x32 icon for a spaceship part (0 structural, 1 component, 2 module).
+Pixmap space_part_icon(int part);
+
 // Food, shield and trade glyphs (7x7) for yield readouts.
 Pixmap yield_icon(int kind);
 

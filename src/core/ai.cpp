@@ -208,6 +208,34 @@ void Game::ai_city(City &c)
             return;
         }
     }
+    // The space race: once the Apollo Program stands, big productive cities
+    // build a modest, complete spaceship and the capital launches it.
+    if (space_open() && c.size >= 6 && st.shield_surplus >= 6 && !front && civs[ci].launch_turn < 0) {
+        const Civ &cv = civs[ci];
+        const int want_modules = difficulty >= Difficulty::King ? 6 : 3;
+        const int want_components = difficulty >= Difficulty::King ? 6 : 4;
+        int on_parts = 0;
+        for (const City &o : cities) on_parts += o.owner == ci && o.id != c.id && !o.build_unit && is_space_build(o.build);
+        if (on_parts < 1 + own_cities / 4) {
+            int part = -1;
+            if (cv.structurals < cv.components + cv.modules + 1 && cv.structurals < want_modules + want_components)
+                part = static_cast<int>(SpacePart::Structural);
+            else if (cv.modules < want_modules)
+                part = static_cast<int>(SpacePart::Module);
+            else if (cv.components < want_components)
+                part = static_cast<int>(SpacePart::Component);
+            if (part >= 0 && can_build(c, false, kSpaceBase + part)) {
+                pick(false, kSpaceBase + part);
+                return;
+            }
+            // A part we can't make yet: a frame section is always welcome.
+            if (part >= 0 && cv.structurals < want_modules + want_components &&
+                can_build(c, false, kSpaceBase + static_cast<int>(SpacePart::Structural))) {
+                pick(false, kSpaceBase + static_cast<int>(SpacePart::Structural));
+                return;
+            }
+        }
+    }
     // A productive city with the basics takes on a Wonder of the World now
     // and then, one or two at a time per civilization.
     if (c.size >= 5 && st.shield_surplus >= 4 && c.has(Building::Temple) && !front) {
@@ -756,6 +784,13 @@ void Game::ai_play(int ci)
     Civ &c = civs[ci];
     ai_diplomacy(ci);
     if (c.research == Advance::None) choose_research_ai(ci);
+    if (can_launch(ci)) {
+        // Launch a complete ship, or a viable one once a rival is on its way.
+        const SpaceStats ss = space_stats(ci);
+        bool rival = false;
+        for (const Civ &o : civs) rival |= &o != &c && o.launch_turn >= 0;
+        if ((ss.success_pct >= 100 && ss.pairs >= 2) || rival) launch(ci);
+    }
     if (c.govt == Government::Despotism && has(ci, Advance::Monarchy)) revolution(ci, Government::Monarchy);
     if (c.govt != Government::Anarchy) {
         const int mx = government_info(c.govt).max_rate;

@@ -6,6 +6,7 @@
 
 #include "game.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -858,6 +859,92 @@ static void test_barbarians()
     CHECK(a.unit(l2) != nullptr);   // kill_stack spares leaders
 }
 
+static void test_space_race()
+{
+    Game g = flat_game();
+    const int s0 = place(g, 0, UnitType::Settlers, 10, 10);
+    const int s1 = place(g, 1, UnitType::Settlers, 30, 10);
+    CHECK(g.found_city(s0, "Home"));
+    CHECK(g.found_city(s1, "Rival"));
+    City *home = g.city_at(10, 10);
+    CHECK(home != nullptr);
+    if (!home) return;
+    const int structural = kSpaceBase + static_cast<int>(SpacePart::Structural);
+    const int component = kSpaceBase + static_cast<int>(SpacePart::Component);
+    const int module = kSpaceBase + static_cast<int>(SpacePart::Module);
+    for (Advance a : {Advance::SpaceFlight, Advance::Plastics, Advance::Superconductor}) g.learn(0, a);
+    // Nothing until the Apollo Program stands somewhere (anyone's will do).
+    CHECK(!g.space_open());
+    CHECK(!g.can_build(*home, false, structural));
+    g.wonder_city[static_cast<int>(Wonder::Apollo)] = g.city_at(30, 10)->id;
+    CHECK(g.space_open());
+    CHECK(g.can_build(*home, false, structural));
+    CHECK(g.can_build(*home, false, module));
+    CHECK_EQ(building_info(structural).cost, 80);
+    CHECK_EQ(building_info(component).cost, 160);
+    CHECK_EQ(building_info(module).cost, 320);
+    // Building parts: components alternate fuel/propulsion, modules cycle.
+    home->build_unit = false;
+    home->build = component;
+    for (int k = 0; k < 2; ++k) {
+        home->shields = 1000;
+        g.end_turn();
+        home = g.city_at(10, 10);
+    }
+    CHECK_EQ(g.civs[0].components, 2);
+    SpaceStats st = g.space_stats(0);
+    CHECK_EQ(st.pairs, 1);
+    CHECK(!st.viable);
+    g.civs[0].modules = 2;
+    st = g.space_stats(0);
+    CHECK_EQ(st.habitation, 1);
+    CHECK_EQ(st.life_support, 1);
+    CHECK_EQ(st.solar, 0);
+    CHECK_EQ(st.energy_pct, 0);
+    g.civs[0].modules = 3;
+    st = g.space_stats(0);
+    CHECK_EQ(st.success_pct, 100);
+    CHECK_EQ(st.unsupported, 5);     // no frame yet
+    CHECK(!g.can_launch(0));
+    g.civs[0].structurals = 5;
+    st = g.space_stats(0);
+    CHECK(st.viable);
+    CHECK(st.years > 4.0);
+    CHECK(g.can_launch(0));
+    // More propulsion: a faster flight.
+    Game faster = g;
+    faster.civs[0].components = 4;
+    faster.civs[0].structurals = 7;
+    CHECK(faster.space_stats(0).years < st.years);
+    // Launch: no more parts; the ship arrives and wins.
+    CHECK(g.launch(0));
+    CHECK(!g.can_launch(0));
+    CHECK(!g.can_build(*g.city_at(10, 10), false, structural));
+    const int arrive = g.civs[0].arrival_turn;
+    CHECK(arrive > g.turn);
+    CHECK(g.arrival_year(0) >= year_for_turn(g.turn) + static_cast<int>(st.years));
+    Game saved;
+    CHECK(load_game(save_game(g), saved));
+    CHECK_EQ(saved.civs[0].arrival_turn, arrive);
+    CHECK_EQ(saved.civs[0].modules, 3);
+    for (int t = 0; t < 400 && g.winner < 0; ++t) g.end_turn();
+    CHECK_EQ(g.winner, 0);
+    CHECK(g.space_win);
+
+    // Losing the capital loses the ship in flight.
+    Game l = saved;
+    City *cap = l.city_at(10, 10);
+    for (Unit &u : l.units) if (u.x == 10 && u.y == 10) u.hp = 0;
+    l.units.erase(std::remove_if(l.units.begin(), l.units.end(), [](const Unit &u) { return u.x == 10 && u.y == 10; }), l.units.end());
+    l.declare_war(1, 0);
+    const int raider = place(l, 1, UnitType::Armor, 11, 10);
+    CHECK(cap != nullptr);
+    l.move(raider, -1, 0);
+    CHECK(l.city_at(10, 10) && l.city_at(10, 10)->owner == 1);
+    CHECK_EQ(l.civs[0].arrival_turn, -1);
+    CHECK_EQ(l.civs[0].modules, 0);
+}
+
 int main(int argc, char **argv)
 {
     const std::map<std::string, std::function<void()>> tests = {
@@ -865,7 +952,7 @@ int main(int argc, char **argv)
         {"units_table", test_units_table}, {"combat_odds", test_combat_odds},       {"city_growth", test_city_growth},
         {"settlers_work", test_settlers_work}, {"movement", test_movement},          {"save_roundtrip", test_save_roundtrip},
         {"ai_smoke", test_ai_smoke},           {"wonders", test_wonders}, {"envoys", test_envoys},
-        {"rail_pollution", test_rail_pollution}, {"barbarians", test_barbarians},
+        {"rail_pollution", test_rail_pollution}, {"barbarians", test_barbarians}, {"space_race", test_space_race},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();

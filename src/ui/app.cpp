@@ -748,6 +748,10 @@ bool App::key(const KeyEvent &k)
             caravan_choose(d.unit_id, d.city_id, k.ch - '1');
             return true;
         }
+        if (d.kind == DialogKind::Spaceship && k.key == Key::Char && k.ch == 'l') {
+            if (g().can_launch(human())) launch_spaceship();
+            return true;
+        }
         if (d.view_only) return true;
         if (d.kind == DialogKind::City && k.ch == 'c') {
             Dialog p;
@@ -856,6 +860,13 @@ bool App::key(const KeyEvent &k)
         Dialog d;
         d.kind = DialogKind::Wonders;
         d.title = "Wonders of the World";
+        open(d);
+        return true;
+    }
+    case 'y': {
+        Dialog d;
+        d.kind = DialogKind::Spaceship;
+        d.title = "Spaceship";
         open(d);
         return true;
     }
@@ -994,6 +1005,7 @@ std::vector<App::MenuItem> App::menu_items(int menu)
         items.push_back({"Science", "A", dialog(DialogKind::Science, "Science Advisor"), have});
         items.push_back({"Foreign Affairs", "", dialog(DialogKind::Foreign, "Foreign Affairs"), have});
         items.push_back({"Wonders of the World", "O", dialog(DialogKind::Wonders, "Wonders of the World"), have});
+        items.push_back({"Spaceship", "Y", dialog(DialogKind::Spaceship, "Spaceship"), have});
         break;
     case 3:
         items.push_back({"Zoom In", "+", [this] { zoom_ = std::min(3, zoom_ + 1); if (const Unit *a = g().unit(active_)) center_on(a->x, a->y); }, have});

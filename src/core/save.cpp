@@ -79,7 +79,8 @@ std::string save_game(const Game &g)
           << c.gold << "|" << c.tax << "|" << c.lux << "|" << c.sci << "|" << static_cast<int>(c.govt) << "|"
           << static_cast<int>(c.target) << "|" << c.anarchy << "|" << techs << "|" << static_cast<int>(c.research) << "|"
           << c.bulbs << "|" << c.future << "|" << c.name_next << "|" << static_cast<int>(c.war) << "|"
-          << static_cast<int>(c.contact) << "|" << static_cast<int>(c.embassy) << "|" << (c.barbarian ? 1 : 0) << "\n";
+          << static_cast<int>(c.contact) << "|" << static_cast<int>(c.embassy) << "|" << (c.barbarian ? 1 : 0) << "|" << c.structurals << "|"
+          << c.components << "|" << c.modules << "|" << c.launch_turn << "|" << c.arrival_turn << "\n";
     }
     for (const City &c : g.cities) {
         std::string worked;
@@ -102,6 +103,7 @@ std::string save_game(const Game &g)
     for (std::uint32_t b : g.wonder_started) o << "|" << b;
     o << "\n";
     o << "climate|" << g.warming << "|" << g.warming_events << "\n";
+    o << "space|" << (g.space_win ? 1 : 0) << "\n";
     o << "end\n";
     return o.str();
 }
@@ -179,6 +181,13 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             c.contact = static_cast<std::uint8_t>(num(f, 19));
             c.embassy = static_cast<std::uint8_t>(num(f, 20));
             c.barbarian = num(f, 21) != 0;
+            if (f.size() > 26) {
+                c.structurals = static_cast<int>(num(f, 22));
+                c.components = static_cast<int>(num(f, 23));
+                c.modules = static_cast<int>(num(f, 24));
+                c.launch_turn = static_cast<int>(num(f, 25));
+                c.arrival_turn = static_cast<int>(num(f, 26));
+            }
             g.civs.push_back(c);
         } else if (k == "city") {
             City c;
@@ -236,6 +245,8 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             g.units.push_back(u);
         } else if (k == "wonders") {
             for (int w = 0; w < kWonderCount && w + 1 < static_cast<int>(f.size()); ++w) g.wonder_city[w] = static_cast<int>(num(f, w + 1));
+        } else if (k == "space") {
+            g.space_win = num(f, 1) != 0;
         } else if (k == "climate") {
             g.warming = static_cast<int>(num(f, 1));
             g.warming_events = static_cast<int>(num(f, 2));

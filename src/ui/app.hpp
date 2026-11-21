@@ -49,7 +49,7 @@ struct KeyEvent {
 enum class DialogKind {
     None, NewGame, Message, Combat, City, Production, Science, Rates, Revolution, SaveLoad, CityName, Cities,
     Foreign, UnitSheet, ConfirmWar, GameOver, Report, Help, WonderBuilt, Wonders,
-    DiplomatMenu, CaravanMenu,
+    DiplomatMenu, CaravanMenu, Spaceship,
 };
 
 struct Dialog {
@@ -185,6 +185,8 @@ private:
     void draw_help(cairo_t *cr, Dialog &d);
     void draw_wonder_built(cairo_t *cr, Dialog &d);
     void draw_wonders(cairo_t *cr, Dialog &d);
+    void draw_spaceship(cairo_t *cr, Dialog &d);
+    void launch_spaceship();
     void draw_diplomat_menu(cairo_t *cr, Dialog &d);
     void draw_caravan_menu(cairo_t *cr, Dialog &d);
     void diplomat_choose(int unit_id, int tx, int ty, civ::DiploAction a);

@@ -112,6 +112,26 @@ struct Civ {
     std::uint8_t contact = 0;   // bit per civ
     std::uint8_t embassy = 0;   // bit per civ we have an embassy with
     bool barbarian = false;     // the raiders: always at war, never a rival for victory
+    // The spaceship.
+    int structurals = 0;
+    int components = 0;
+    int modules = 0;
+    int launch_turn = -1;       // -1 not launched
+    int arrival_turn = -1;
+};
+
+// What a civ's spaceship adds up to.
+struct SpaceStats {
+    int fuel = 0, propulsion = 0, pairs = 0;
+    int habitation = 0, life_support = 0, solar = 0;
+    int unsupported = 0;        // components and modules no structural holds
+    int population = 0;         // colonists
+    int life_pct = 0;           // life support for the colonists
+    int energy_pct = 0;         // power for habitation and life support
+    int success_pct = 0;
+    int mass = 0;               // tons
+    double years = 0;           // flight time
+    bool viable = false;        // enough of everything to launch
 };
 
 enum class MsgKind : std::uint8_t { Info, Good, Bad, Combat, Tech, City, Wonder };
@@ -200,7 +220,8 @@ public:
     int next_city_id = 1;
     std::vector<Message> messages;
     CombatResult last_combat;
-    int winner = -1;           // civ that won by conquest
+    int winner = -1;           // civ that won by conquest or by reaching Alpha Centauri
+    bool space_win = false;    // the winner's colonists reached Alpha Centauri
     bool human_dead = false;
     bool all_ai = false;
     std::uint64_t seed = 1;
@@ -312,6 +333,13 @@ public:
     void spawn_barbarians(bool force_sea = false, bool force_land = false);
     int ransom(int unit_id, int tx, int ty);        // capture lone barbarian leaders: gold won
 
+    // --- space race
+    bool space_open() const;                        // the Apollo Program stands somewhere
+    SpaceStats space_stats(int civ) const;
+    bool can_launch(int civ) const;
+    bool launch(int civ);
+    int arrival_year(int civ) const;                // -1 if not in flight
+
     // --- pollution
     int polluted_squares() const;
     int pollution_chance(const City &c) const;     // percent per turn
@@ -360,6 +388,8 @@ private:
     bool barbarian_landing(int bc, UnitType ship, const std::vector<UnitType> &army);
     bool barbarian_uprising(int bc, const std::vector<UnitType> &army);
     void global_warming();
+    void space_arrivals();
+    void lose_spaceship(int civ, bool in_flight);
 };
 
 // Save and load as plain text. Version line first.

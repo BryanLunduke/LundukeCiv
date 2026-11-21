@@ -207,7 +207,13 @@ const BuildingInfo &building_info(int b)
         for (int w = 0; w < kWonderCount; ++w) out[w] = {kWonders[w].name, kWonders[w].cost, 0, kWonders[w].tech, kWonders[w].effect};
         return out;
     }();
+    static const BuildingInfo parts[kSpacePartCount] = {
+        {"SS Structural", 80, 0, Advance::SpaceFlight, "A section of the spaceship's frame. Every component and module must be held by one."},
+        {"SS Component", 160, 0, Advance::Plastics, "Fuel and propulsion, in turn. Each pair makes the flight faster."},
+        {"SS Module", 320, 0, Advance::Superconductor, "Habitation, life support and solar panels, in turn. Colonists need all three."},
+    };
     if (is_wonder_build(b)) return wonders[b - kWonderBase];
+    if (is_space_build(b)) return parts[b - kSpaceBase];
     if (b < 0 || b >= kBuildingCount) return kBuildings[0];
     return kBuildings[b];
 }

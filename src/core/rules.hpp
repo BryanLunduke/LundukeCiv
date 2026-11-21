@@ -148,6 +148,16 @@ inline const WonderInfo &wonder_info(int w) { return wonder_info(static_cast<Won
 // "the Pyramids", "Copernicus' Observatory": the name as used in a sentence.
 std::string wonder_title(int w);
 
+// Spaceship parts (the space race): built like improvements once the
+// Apollo Program stands anywhere, with index kSpaceBase + part.
+enum class SpacePart : std::uint8_t { Structural, Component, Module, Count };
+constexpr int kSpacePartCount = static_cast<int>(SpacePart::Count);
+constexpr int kSpaceBase = 96;
+inline bool is_space_build(int what) { return what >= kSpaceBase && what < kSpaceBase + kSpacePartCount; }
+constexpr int kMaxStructurals = 39;
+constexpr int kMaxComponents = 16;   // fuel and propulsion, in turn
+constexpr int kMaxModules = 12;      // habitation, life support, solar panels, in turn
+
 // Buildings by index; wonder indices (kWonderBase + w) give the wonder's
 // name, cost and effect with no upkeep.
 const BuildingInfo &building_info(int b);

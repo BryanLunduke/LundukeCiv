@@ -84,6 +84,7 @@ void App::draw_dialog(cairo_t *cr, Dialog &d)
     case DialogKind::Help: draw_help(cr, d); break;
     case DialogKind::WonderBuilt: draw_wonder_built(cr, d); break;
     case DialogKind::Wonders: draw_wonders(cr, d); break;
+    case DialogKind::Spaceship: draw_spaceship(cr, d); break;
     case DialogKind::DiplomatMenu: draw_diplomat_menu(cr, d); break;
     case DialogKind::CaravanMenu: draw_caravan_menu(cr, d); break;
     default: break;
@@ -495,19 +496,22 @@ void App::draw_city(cairo_t *cr, Dialog &d)
     ry += 20;
     {
         double eh = 22;
-        if (!c.build_unit) eh = measure(cr, kUiFont, building_info(c.build).effect, static_cast<int>(rw - (is_wonder_build(c.build) ? 94 : 24))).h;
+        if (!c.build_unit)
+            eh = measure(cr, kUiFont, building_info(c.build).effect,
+                         static_cast<int>(rw - (is_wonder_build(c.build) || is_space_build(c.build) ? 94 : 24))).h;
         const double boxh = std::max(100.0, 34 + eh + 46);
         round_rect(cr, rx, ry, rw, boxh, 8);
         set(cr, kSlateDeep);
         cairo_fill(cr);
         const int cost = g().production_cost(c);
         std::string name;
-        const bool wonder = !c.build_unit && is_wonder_build(c.build);
+        const bool wonder = !c.build_unit && (is_wonder_build(c.build) || is_space_build(c.build));
         if (c.build_unit) {
             paint_pixmap(cr, art::unit_card(static_cast<UnitType>(c.build), civ_colors(g().civs[c.owner].color)), rx + 8, ry + 8, 2);
             name = unit_info(c.build).name;
         } else if (wonder) {
-            paint_pixmap(cr, art::wonder_icon(c.build - kWonderBase), rx + 8, ry + 8, 2);
+            paint_pixmap(cr, is_space_build(c.build) ? art::space_part_icon(c.build - kSpaceBase) : art::wonder_icon(c.build - kWonderBase), rx + 8,
+                         ry + 8, 2);
             name = building_info(c.build).name;
             text(cr, kUiFont, building_info(c.build).effect, rx + 82, ry + 34, kSlateDim, 1.0, static_cast<int>(rw - 94));
         } else {
@@ -654,6 +658,33 @@ void App::draw_production(cairo_t *cr, Dialog &d)
         set(cr, cur ? hex(0x3E4A5E) : (hv ? hex(0x354154) : hex(0x29323F)));
         cairo_fill(cr);
         paint_pixmap(cr, art::wonder_icon(wv), M + 1, by + 1, 1);
+        const BuildingInfo &bi = building_info(b);
+        text(cr, kBoldFont, bi.name, M + 42, by + 7, cur ? kSlateGold : kSlateInk);
+        text_right(cr, kUiFont, std::to_string(bi.cost) + " · " + eta(bi.cost), M + colw - 10, by + 8, kSlateDim);
+        const int cid = c.id;
+        hot(M, by, colw, 34, [this, cid, b] {
+            g().set_production(cid, false, b);
+            close_top();
+        });
+        by += 38;
+    }
+    bool space_header = false;
+    for (int part = 0; part < kSpacePartCount; ++part) {
+        const int b = kSpaceBase + part;
+        if (!g().can_build(c, false, b)) continue;
+        if (!space_header) {
+            by += 6;
+            section(cr, "SPACESHIP", M, by, M + colw);
+            by += 20;
+            space_header = true;
+        }
+        if (by + 36 > y + h - 70) break;
+        const bool cur = !c.build_unit && c.build == b;
+        const bool hv = hover(M, by, colw, 34);
+        round_rect(cr, M, by, colw, 34, 5);
+        set(cr, cur ? hex(0x3E4A5E) : (hv ? hex(0x354154) : hex(0x29323F)));
+        cairo_fill(cr);
+        paint_pixmap(cr, art::space_part_icon(part), M + 1, by + 1, 1);
         const BuildingInfo &bi = building_info(b);
         text(cr, kBoldFont, bi.name, M + 42, by + 7, cur ? kSlateGold : kSlateInk);
         text_right(cr, kUiFont, std::to_string(bi.cost) + " · " + eta(bi.cost), M + colw - 10, by + 8, kSlateDim);
@@ -1055,7 +1086,12 @@ void App::draw_game_over(cairo_t *cr, Dialog &d)
     double cy = dialog_frame(cr, x, y, w, h, d.title);
     const bool won = g().winner == human();
     std::string msg;
-    if (won) {
+    if (won && g().space_win) {
+        msg = "Your colonists have reached Alpha Centauri. The " + g().civs[human()].name + " begin a new world among the stars, and your name, " +
+              g().civs[human()].leader + ", goes with them.";
+    } else if (g().space_win && g().winner >= 0) {
+        msg = "The " + g().civs[g().winner].name + " reached Alpha Centauri first. The future belongs to them.";
+    } else if (won) {
         msg = "The " + g().civs[human()].name + " rule the whole world. Your name, " + g().civs[human()].leader +
               ", will be remembered for all time.";
     } else if (g().human_dead) {
@@ -1064,7 +1100,8 @@ void App::draw_game_over(cairo_t *cr, Dialog &d)
         msg = "The " + g().civs[g().winner].name + " have conquered the world.";
     }
     text(cr, kUiFont, msg, x + 24, cy, kSlateInk, 1.0, static_cast<int>(w - 48));
-    text(cr, kUiFont, "Final year: " + year_text(year_for_turn(g().turn)), x + 24, cy + 70, kSlateDim);
+    const double fy = cy + measure(cr, kUiFont, msg, static_cast<int>(w - 48)).h + 14;
+    text(cr, kUiFont, "Final year: " + year_text(year_for_turn(g().turn)), x + 24, std::max(cy + 70, fy), kSlateDim);
     const double bx = x + w - 24 - 160, by = y + h - 54;
     wide_button(cr, bx, by, 160, 38, "New Game", "", true, hover(bx, by, 160, 38));
     hot(bx, by, 160, 38, [this] { open_new_game_dialog(); });
@@ -1377,6 +1414,120 @@ void App::caravan_choose(int unit_id, int city_id, int choice)
     }
     collect_news(false);
     select_next(true);
+}
+
+// The spaceship: a blueprint of the ship as built so far, its numbers, the
+// launch button, and what rivals have on the pad or in flight.
+void App::draw_spaceship(cairo_t *cr, Dialog &d)
+{
+    const int me = human();
+    const Civ &c = g().civs[me];
+    const SpaceStats st = g().space_stats(me);
+    const double w = std::min(1180, geo_.win_w - 16), h = std::min(560, geo_.win_h - 16);
+    const double x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, d.title);
+    const double L = x + 20, R = x + w - 20;
+    const bool flying = c.launch_turn >= 0;
+    // Blueprint well.
+    const int sc = 2;
+    const double bw = art::spaceship_width() * sc + 24, bh = art::spaceship_height() * sc + 24;
+    round_rect(cr, L, cy, bw, bh, 8);
+    set(cr, hex(0x0E1424));
+    cairo_fill(cr);
+    cairo_save(cr);
+    round_rect(cr, L, cy, bw, bh, 8);
+    cairo_clip(cr);
+    for (double gx = L + 12; gx < L + bw; gx += 16.0 * sc) fill(cr, gx, cy, 1, bh, hex(0x16203A));
+    for (double gy = cy + 12; gy < cy + bh; gy += 16.0 * sc) fill(cr, L, gy, bw, 1, hex(0x16203A));
+    for (int k = 0; k < 40; ++k) {
+        const double sx = L + 6 + std::fmod(k * 197.3, bw - 12), sy = cy + 6 + std::fmod(k * 71.9, bh - 12);
+        fill(cr, std::round(sx), std::round(sy), k % 5 ? 2 : 3, k % 5 ? 2 : 3, k % 3 ? hex(0x8A9CC8) : hex(0xE8ECF8));
+    }
+    cairo_restore(cr);
+    paint_pixmap(cr, art::spaceship(c.structurals, c.components, c.modules, flying), L + 12, cy + 12, sc);
+    text(cr, kTagFont, flying ? "IN FLIGHT" : (c.structurals + c.components + c.modules ? "ON THE LAUNCH PAD" : "BLUEPRINT"), L + 14, cy + 8,
+         flying ? kSlateGold : kSlateDim);
+
+    // Numbers.
+    const double sx = L + bw + 20, sw = R - sx;
+    double sy = cy;
+    auto row = [&](const std::string &label, const std::string &value, Ink ink) {
+        text(cr, kTagFont, label, sx, sy + 3, kSlateDim);
+        text_right(cr, kBoldFont, value, R, sy, ink);
+        sy += 24;
+    };
+    section(cr, "PARTS", sx, sy, R);
+    sy += 20;
+    row("STRUCTURALS", std::to_string(c.structurals) + " / " + std::to_string(kMaxStructurals), kSlateInk);
+    row("COMPONENTS", std::to_string(c.components) + " / " + std::to_string(kMaxComponents), kSlateInk);
+    text(cr, kUiFont, std::to_string(st.fuel) + " fuel \u00b7 " + std::to_string(st.propulsion) + " propulsion", sx + 12, sy - 4, kSlateDim);
+    sy += 18;
+    row("MODULES", std::to_string(c.modules) + " / " + std::to_string(kMaxModules), kSlateInk);
+    text(cr, kUiFont, std::to_string(st.habitation) + " habitation \u00b7 " + std::to_string(st.life_support) + " life \u00b7 " + std::to_string(st.solar) + " solar",
+         sx + 12, sy - 4, kSlateDim);
+    sy += 24;
+    section(cr, "FLIGHT", sx, sy, R);
+    sy += 20;
+    row("COLONISTS", with_commas(st.population), kSlateInk);
+    row("LIFE SUPPORT", std::to_string(st.life_pct) + "%", st.life_pct >= 100 ? kSlateGood : kSlateBad);
+    row("ENERGY", std::to_string(st.energy_pct) + "%", st.energy_pct >= 100 ? kSlateGood : kSlateBad);
+    row("MASS", with_commas(st.mass) + " tons", kSlateInk);
+    char yrs[32];
+    std::snprintf(yrs, sizeof yrs, "%.1f years", st.years);
+    row("FLIGHT TIME", st.pairs ? yrs : "\u2014", kSlateInk);
+    row("SUCCESS", std::to_string(st.success_pct) + "%", st.success_pct >= 75 ? kSlateGood : (st.success_pct > 0 ? kSlateGold : kSlateBad));
+    sy += 4;
+    std::string status;
+    if (flying) {
+        status = "Arrives at Alpha Centauri in " + year_text(g().arrival_year(me)) + ". Lose the capital and the ship is lost.";
+    } else if (!g().space_open()) {
+        status = "No spaceship can be built until the Apollo Program stands somewhere in the world.";
+    } else if (st.unsupported > 0) {
+        status = "Needs " + std::to_string(st.unsupported) + " more structural" + (st.unsupported == 1 ? "" : "s") + " to hold every part.";
+    } else if (!st.viable) {
+        status = "Needs at least one fuel and propulsion pair and one of each module.";
+    } else {
+        status = "Ready to launch from the capital.";
+    }
+    text(cr, kUiFont, status, sx, sy, flying || st.viable ? kSlateGold : kSlateDim, 1.0, static_cast<int>(sw));
+
+    // Rivals.
+    double ry = cy + bh + 14;
+    section(cr, "OTHER SPACESHIPS", L, ry, L + bw);
+    ry += 20;
+    bool any = false;
+    for (int k = 0; k < static_cast<int>(g().civs.size()); ++k) {
+        const Civ &o = g().civs[k];
+        if (k == me || o.barbarian || !o.alive || !(o.structurals + o.components + o.modules)) continue;
+        any = true;
+        const std::string what = o.launch_turn >= 0 ? "in flight, arriving " + year_text(g().arrival_year(k))
+                                                    : std::to_string(o.structurals + o.components + o.modules) + " parts on the pad";
+        round_rect(cr, L, ry + 3, 12, 12, 3);
+        set_argb(cr, civ_colors(o.color).main);
+        cairo_fill(cr);
+        text(cr, kBoldFont, o.name, L + 20, ry, kSlateInk);
+        text(cr, kUiFont, what, L + 220, ry + 1, o.launch_turn >= 0 ? kSlateBad : kSlateDim);
+        ry += 22;
+    }
+    if (!any) text(cr, kUiFont, "No rival has begun a spaceship.", L, ry, kSlateDim);
+
+    const double by = y + h - 54;
+    const bool can = g().can_launch(me);
+    double bx = R - 140;
+    wide_button(cr, bx, by, 140, 38, "Close", "Esc", false, hover(bx, by, 140, 38));
+    hot(bx, by, 140, 38, [this] { close_top(); });
+    if (!flying) {
+        bx -= 170;
+        wide_button(cr, bx, by, 160, 38, "Launch", "L", true, can && hover(bx, by, 160, 38), can);
+        if (can) hot(bx, by, 160, 38, [this] { launch_spaceship(); });
+    }
+}
+
+void App::launch_spaceship()
+{
+    const int me = human();
+    if (!g().launch(me)) return;
+    collect_news(false);
 }
 
 } // namespace ui
