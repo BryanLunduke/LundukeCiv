@@ -10,6 +10,7 @@
 
 #include "draw.hpp"
 #include "game.hpp"
+#include "pad_nav.hpp"
 #include "terrain_paint.hpp"
 
 #include <cairo.h>
@@ -39,6 +40,9 @@ enum class Key {
     End, Delete, Char,
 };
 
+// Gamepad buttons by position (south = A on a Deck or Xbox pad).
+enum class PadButton { A, B, X, Y, LB, RB, View, Menu, Up, Down, Left, Right, L3, R3, LT, RT };
+
 struct KeyEvent {
     Key key = Key::None;
     char ch = 0;        // lower-case letter or digit for Key::Char, or '+'/'-'
@@ -48,7 +52,8 @@ struct KeyEvent {
 
 enum class DialogKind {
     None, NewGame, Message, Combat, City, Production, Science, Rates, Revolution, SaveLoad, CityName, Cities,
-    Foreign, UnitSheet, ConfirmWar, GameOver, Report, Help,
+    Foreign, UnitSheet, ConfirmWar, GameOver, Report, Help, WonderBuilt, Wonders,
+    DiplomatMenu, CaravanMenu, Spaceship,
 };
 
 struct Dialog {
@@ -62,6 +67,8 @@ struct Dialog {
     bool saving = false;  // SaveLoad: save or load
     int scroll = 0;
     std::string field;    // CityName text
+    bool view_only = false;   // City: a foreign city a Diplomat investigates
+    int tx = 0, ty = 0;       // DiplomatMenu: the square the Diplomat faces
 };
 
 struct Hot {
@@ -88,7 +95,15 @@ public:
     bool mouse_down(double x, double y, int button);
     bool mouse_move(double x, double y);
     bool wheel(double x, double y, double dy);
-    bool tick(unsigned long long ms);   // blink timer
+    bool tick(unsigned long long ms);   // blink timer, held D-pad, right-stick pan
+    // Gamepad, as in Lunduke City 2: the window code passes button presses
+    // and stick positions; the app keeps a tile cursor and dialog focus.
+    bool pad_button(PadButton b, bool down, unsigned long long ms);
+    bool pad_sticks(float lx, float ly, float rx, float ry, unsigned long long ms);
+    void set_pad_glyphs(const pad::Glyphs &glyphs, bool deck);
+    void pad_unplugged();
+    bool pad_busy() const;          // a held direction or stick wants quick ticks
+    void pointer_used();            // mouse or keyboard: hints go back unless on a Deck
     bool wants_text() const;
     bool quit_requested() const { return quit_; }
 
@@ -116,6 +131,31 @@ private:
     std::string save_dir_;
     Geometry geo_;
     bool end_of_turn_prompt_ = false;
+
+    // Gamepad state.
+    pad::Glyphs glyphs_;
+    bool deck_ = false;
+    bool pad_nav_ = false;
+    int cursor_x_ = -1, cursor_y_ = -1;
+    int cursor_unit_ = -1;          // the unit the cursor last snapped to
+    pad::Repeat repeat_;
+    int stick_dx_ = 0, stick_dy_ = 0;
+    float pan_x_ = 0, pan_y_ = 0;
+    unsigned long long last_pan_ = 0;
+    double focus_cx_ = -1, focus_cy_ = -1;
+    int focus_hot_ = -1;
+    int menu_item_ = 0;
+    bool pad_hints() const { return pad_nav_ || deck_; }
+    void pad_direction(int dx, int dy);
+    void pad_confirm();
+    void pad_menu_move(int dir);
+    void select_prev();
+    void snap_cursor();
+    std::vector<int> focus_hots() const;
+    void resolve_focus();
+    void draw_pad_overlay(cairo_t *cr);
+    double draw_pad_hints(cairo_t *cr, double right, double y, const std::vector<std::pair<std::string, std::string>> &hints);
+    std::vector<std::pair<std::string, std::string>> map_pad_hints();
 
     // Terrain cache: the whole world at native size.
     Pixmap terrain_;
@@ -180,6 +220,14 @@ private:
     void draw_confirm_war(cairo_t *cr, Dialog &d);
     void draw_game_over(cairo_t *cr, Dialog &d);
     void draw_help(cairo_t *cr, Dialog &d);
+    void draw_wonder_built(cairo_t *cr, Dialog &d);
+    void draw_wonders(cairo_t *cr, Dialog &d);
+    void draw_spaceship(cairo_t *cr, Dialog &d);
+    void launch_spaceship();
+    void draw_diplomat_menu(cairo_t *cr, Dialog &d);
+    void draw_caravan_menu(cairo_t *cr, Dialog &d);
+    void diplomat_choose(int unit_id, int tx, int ty, civ::DiploAction a);
+    void caravan_choose(int unit_id, int city_id, int choice);
     void draw_title(cairo_t *cr);
 
     struct MenuItem {

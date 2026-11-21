@@ -35,6 +35,8 @@ char status_letter(const Unit &u)
     case Order::Irrigate: return 'I';
     case Order::Mine: return 'M';
     case Order::Fortress: return 'P';
+    case Order::Railroad: return 'R';
+    case Order::Clean: return 'P';
     default: return 0;
     }
 }
@@ -154,7 +156,7 @@ void App::refresh_terrain()
         for (int x = 0; x < now.w; ++x) {
             const art::PaintTile &a = now.at(x, y), &b = painted_.at(x, y);
             if (a.terrain != b.terrain || a.special != b.special || a.river != b.river || a.road != b.road ||
-                a.irrigated != b.irrigated || a.mine != b.mine || a.hut != b.hut || a.city != b.city) {
+                a.rail != b.rail || a.pollution != b.pollution || a.irrigated != b.irrigated || a.mine != b.mine || a.hut != b.hut || a.city != b.city) {
                 changed.push_back({x, y});
             }
         }
@@ -249,21 +251,29 @@ void App::end_turn()
 {
     if (!game_ || g().winner >= 0 || g().human_dead) return;
     goto_mode_ = false;
+    const size_t first = g().messages.size();
     g().end_turn();
     refresh_terrain();
     collect_news(true);
     begin_turn();
+    // Raiders at the gates: show where they are rather than the next unit.
+    for (size_t i = first; i < g().messages.size(); ++i) {
+        const Message &m = g().messages[i];
+        if (m.civ == human() && m.kind == MsgKind::Bad && m.x >= 0 && m.text.find("Barbarian") != std::string::npos) center_on(m.x, m.y);
+    }
 }
 
 void App::collect_news(bool report)
 {
     std::vector<std::string> lines, popup;
+    std::vector<std::pair<int, std::string>> wonders;
     std::string popup_title;
     for (size_t i = seen_messages_; i < g().messages.size(); ++i) {
         const Message &m = g().messages[i];
         if (m.civ != human() && m.civ != -1) continue;
         news_ = m.text;
         lines.push_back(m.text);
+        if (m.kind == MsgKind::Wonder && m.wonder >= 0) wonders.push_back({m.wonder, m.text});
         if (m.kind == MsgKind::Tech || m.kind == MsgKind::Good || m.kind == MsgKind::Bad) {
             popup.push_back(m.text);
             if (popup_title.empty()) popup_title = m.kind == MsgKind::Tech ? "Science" : (m.kind == MsgKind::Bad ? "Bad News" : "Good News");
@@ -279,6 +289,14 @@ void App::collect_news(bool report)
         open(d);
     } else if (!report && !popup.empty()) {
         message(popup_title, popup);
+    }
+    for (const auto &w : wonders) {
+        Dialog d;
+        d.kind = DialogKind::WonderBuilt;
+        d.title = "Wonder of the World";
+        d.other = w.first;
+        d.lines = {w.second};
+        open(d);
     }
 }
 
@@ -350,6 +368,26 @@ void App::try_move(int dx, int dy)
         dialogs_.insert(dialogs_.begin() + static_cast<long>(before), d);
         return;
     }
+    case MoveResult::Diplomat: {
+        Dialog d;
+        d.kind = DialogKind::DiplomatMenu;
+        d.unit_id = active_;
+        d.tx = tx;
+        d.ty = ty;
+        open(d);
+        return;
+    }
+    case MoveResult::Caravan: {
+        const City *c = g().city_at(tx, ty);
+        if (!c) break;
+        Dialog d;
+        d.kind = DialogKind::CaravanMenu;
+        d.unit_id = active_;
+        d.city_id = c->id;
+        open(d);
+        keep_in_view(tx, ty);
+        return;
+    }
     case MoveResult::Zoc: news_ = "Can't move there: an enemy unit's zone of control."; return;
     case MoveResult::Blocked:
         if (ty >= 0 && ty < g().map.h && g().map.ocean(tx, ty)) news_ = "Your " + std::string(unit_info(u->type).name) + " can't go to sea.";
@@ -371,6 +409,17 @@ void App::do_order(char order)
     const bool settlers = info.flags & kSettlers;
     switch (order) {
     case 'b':
+        if (u->type == UnitType::Caravan) {
+            // In a city: help with its wonder or open a trade route.
+            if (const City *c = g().city_at(u->x, u->y)) {
+                Dialog d;
+                d.kind = DialogKind::CaravanMenu;
+                d.unit_id = active_;
+                d.city_id = c->id;
+                open(d);
+            }
+            return;
+        }
         if (!settlers) return;
         if (const City *c = g().city_at(u->x, u->y)) {
             if (c->owner == human() && g().join_city(active_)) {
@@ -397,8 +446,10 @@ void App::do_order(char order)
     case 'r':
     case 'i':
     case 'm': {
-        const Order job = order == 'r' ? Order::Road : (order == 'i' ? Order::Irrigate : Order::Mine);
+        Order job = order == 'r' ? Order::Road : (order == 'i' ? Order::Irrigate : Order::Mine);
         if (!settlers) return;
+        // On an existing road, R lays railroad once Railroad is known.
+        if (job == Order::Road && g().can_work(*u, Order::Railroad)) job = Order::Railroad;
         if (!g().start_work(active_, job)) {
             news_ = order == 'r' ? "No road can be built here." : (order == 'i' ? "No water nearby to irrigate from." : "Nothing to mine here.");
             return;
@@ -407,6 +458,11 @@ void App::do_order(char order)
         return;
     }
     case 'p':
+        // P cleans up pollution first, as in the original's key map.
+        if (settlers && g().can_work(*u, Order::Clean) && g().start_work(active_, Order::Clean)) {
+            unit_moved();
+            return;
+        }
         if (settlers && g().start_work(active_, Order::Fortress)) unit_moved();
         return;
     case 'f':
@@ -684,6 +740,19 @@ bool App::key(const KeyEvent &k)
             close_top();
             return true;
         }
+        if (d.kind == DialogKind::DiplomatMenu && k.key == Key::Char && k.ch >= '1' && k.ch <= '6') {
+            diplomat_choose(d.unit_id, d.tx, d.ty, static_cast<DiploAction>(k.ch - '1'));
+            return true;
+        }
+        if (d.kind == DialogKind::CaravanMenu && k.key == Key::Char && k.ch >= '1' && k.ch <= '3') {
+            caravan_choose(d.unit_id, d.city_id, k.ch - '1');
+            return true;
+        }
+        if (d.kind == DialogKind::Spaceship && k.key == Key::Char && k.ch == 'l') {
+            if (g().can_launch(human())) launch_spaceship();
+            return true;
+        }
+        if (d.view_only) return true;
         if (d.kind == DialogKind::City && k.ch == 'c') {
             Dialog p;
             p.kind = DialogKind::Production;
@@ -787,6 +856,20 @@ bool App::key(const KeyEvent &k)
         open(d);
         return true;
     }
+    case 'o': {
+        Dialog d;
+        d.kind = DialogKind::Wonders;
+        d.title = "Wonders of the World";
+        open(d);
+        return true;
+    }
+    case 'y': {
+        Dialog d;
+        d.kind = DialogKind::Spaceship;
+        d.title = "Spaceship";
+        open(d);
+        return true;
+    }
     case 'v': {
         Dialog d;
         d.kind = DialogKind::Cities;
@@ -862,6 +945,20 @@ bool App::wheel(double x, double y, double dy)
 
 bool App::tick(unsigned long long ms)
 {
+    bool pad_moved = false;
+    for (int k = pad::repeat_steps(repeat_, static_cast<long long>(ms)); k > 0; --k) {
+        pad_direction(repeat_.dx, repeat_.dy);
+        pad_moved = true;
+    }
+    if ((pan_x_ || pan_y_) && game_ && dialogs_.empty() && ms - last_pan_ >= 90) {
+        last_pan_ = ms;
+        // Right stick: scroll the map a square at a time.
+        view_x_ = g().map.wrap_x(view_x_ + (pan_x_ > 0 ? 1 : (pan_x_ < 0 ? -1 : 0)));
+        const int rows = geo_.map_h / tile_px();
+        view_y_ = std::clamp(view_y_ + (pan_y_ > 0 ? 1 : (pan_y_ < 0 ? -1 : 0)), 0, std::max(0, g().map.h - rows));
+        pad_moved = true;
+    }
+    if (pad_moved) return true;
     if (ms - last_blink_ >= 450) {
         last_blink_ = ms;
         blink_ = !blink_;
@@ -899,10 +996,16 @@ std::vector<App::MenuItem> App::menu_items(int menu)
         break;
     case 1:
         items.push_back({"Found City / Join City", "B", [this] { do_order('b'); }, settlers});
-        items.push_back({"Build Road", "R", [this] { do_order('r'); }, settlers});
+        if (settlers && g().can_work(*u, Order::Railroad))
+            items.push_back({"Build Railroad", "R", [this] { do_order('r'); }, true});
+        else
+            items.push_back({"Build Road", "R", [this] { do_order('r'); }, settlers});
         items.push_back({"Irrigate", "I", [this] { do_order('i'); }, settlers});
         items.push_back({"Build Mine", "M", [this] { do_order('m'); }, settlers});
-        items.push_back({"Build Fortress", "P", [this] { do_order('p'); }, settlers && g().can_work(*u, Order::Fortress)});
+        if (settlers && g().can_work(*u, Order::Clean))
+            items.push_back({"Clean Up Pollution", "P", [this] { do_order('p'); }, true});
+        else
+            items.push_back({"Build Fortress", "P", [this] { do_order('p'); }, settlers && g().can_work(*u, Order::Fortress)});
         items.push_back({"Fortify", "F", [this] { do_order('f'); }, u && !settlers});
         items.push_back({"Sentry", "S", [this] { do_order('s'); }, u != nullptr});
         items.push_back({"Go To...", "G", [this] { do_order('g'); }, u != nullptr});
@@ -915,6 +1018,8 @@ std::vector<App::MenuItem> App::menu_items(int menu)
         items.push_back({"Cities", "V", dialog(DialogKind::Cities, "Cities"), have});
         items.push_back({"Science", "A", dialog(DialogKind::Science, "Science Advisor"), have});
         items.push_back({"Foreign Affairs", "", dialog(DialogKind::Foreign, "Foreign Affairs"), have});
+        items.push_back({"Wonders of the World", "O", dialog(DialogKind::Wonders, "Wonders of the World"), have});
+        items.push_back({"Spaceship", "Y", dialog(DialogKind::Spaceship, "Spaceship"), have});
         break;
     case 3:
         items.push_back({"Zoom In", "+", [this] { zoom_ = std::min(3, zoom_ + 1); if (const Unit *a = g().unit(active_)) center_on(a->x, a->y); }, have});
@@ -959,6 +1064,7 @@ void App::render(cairo_t *cr, int w, int h)
     } else if (menu_open_ >= 0) {
         draw_menu_dropdown(cr);
     }
+    draw_pad_overlay(cr);
 }
 
 void App::draw_title(cairo_t *cr)
@@ -966,7 +1072,7 @@ void App::draw_title(cairo_t *cr)
     // A quiet backdrop for the New Game dialog: the title and two rows of
     // unit counters along the foot of the screen.
     text_center(cr, "Sans Bold 30", "LUNDUKE CIV", geo_.win_w / 2.0, 44, kSlateGold);
-    const int n = kUnitTypeCount, per_row = 14;
+    const int n = static_cast<int>(UnitType::Leader), per_row = 14;   // the 28 buildable units
     const double gap = (geo_.win_w - 40.0) / per_row;
     for (int i = 0; i < n; ++i) {
         const Pixmap card = art::unit_card(static_cast<UnitType>(i), civ_colors(i % 8));
@@ -1029,8 +1135,10 @@ void App::draw_menu_dropdown(cairo_t *cr)
     cairo_rectangle(cr, x + 0.5, y + 0.5, w - 1, h - 1);
     cairo_stroke(cr);
     double iy = y + 4;
+    int index = 0;
     for (const MenuItem &it : items) {
-        const bool hv = it.enabled && hover(x, iy, w, ih);
+        const bool hv = it.enabled && (pad_hints() ? index == menu_item_ : hover(x, iy, w, ih));
+        ++index;
         if (hv) fill(cr, x + 2, iy, w - 4, ih, hex(0x3A4B63));
         text(cr, kMenuFont, it.label, x + 14, iy + 5, it.enabled ? kSlateInk : kSlateEdge);
         if (!it.key.empty()) text_right(cr, kTagFont, it.key, x + w - 12, iy + 9, it.enabled ? kSlateDim : kSlateEdge);
@@ -1075,7 +1183,7 @@ void App::draw_band(cairo_t *cr)
             open(d);
         };
     };
-    const std::vector<Item> items = {
+    std::vector<Item> items = {
         {"CIVILIZATION", c.name, kSlateInk, dlg(DialogKind::Foreign, "Foreign Affairs")},
         {"YEAR", year_text(year_for_turn(g().turn)), kSlateInk, nullptr},
         {"TREASURY", with_commas(c.gold) + " gold", kSlateGold, dlg(DialogKind::Rates, "Tax Rates")},
@@ -1086,6 +1194,11 @@ void App::draw_band(cairo_t *cr)
          dlg(DialogKind::Revolution, "Revolution")},
         {"RESEARCH", research, c.research == Advance::None ? kSlateGold : kSlateInk, dlg(DialogKind::Science, "Science Advisor")},
     };
+    if (const int dirty = g().polluted_squares()) {
+        // Pollution on the map: how much, and how close global warming is.
+        items.push_back({"POLLUTION", std::to_string(dirty) + " sq \u00b7 warming " + std::to_string(g().warming_risk()) + "%",
+                         g().warming_risk() >= 50 ? kSlateBad : kSlateGold, nullptr});
+    }
     double x = 12;
     for (const Item &it : items) {
         const double lw = measure(cr, kTagFont, it.label).w;
@@ -1177,6 +1290,13 @@ void App::draw_map(cairo_t *cr)
             pm.blit(art::unit_card(under->type, civ_colors(g().civs[under->owner].color)), tx * T + 2, ty * T - 2);
         }
         pm.blit(art::unit_card(top->type, cc, status_letter(*top), top->veteran), tx * T, ty * T);
+        if (top->hp < kUnitHp) {
+            // Wounded: a hit-point bar down the left edge of the counter.
+            const int bh = 24, filled = std::max(1, bh * top->hp / kUnitHp);
+            const Argb col = top->hp * 3 > kUnitHp * 2 ? rgb(0x6CCB7A) : (top->hp * 3 > kUnitHp ? rgb(0xF2C14E) : rgb(0xE5675A));
+            pm.fill_rect(tx * T, ty * T + 4, 4, bh + 2, rgb(0x151B23));
+            pm.fill_rect(tx * T + 1, ty * T + 5 + (bh - filled), 2, filled, col);
+        }
         if (top->id == active_ && blink_ && dialogs_.empty()) art::bracket(pm, tx * T, ty * T, rgb(0xF2C14E), 0xA0000000);
     }
     art::apply_fog(pm, view_x_, view_y_, [&](int x, int y) { return m.valid_y(y) && ((m.at(x, y).explored >> me) & 1u); });
@@ -1300,10 +1420,22 @@ void App::draw_sidebar(cairo_t *cr)
         text(cr, kUiFont, home ? "Home: " + home->name : "No home city", tx, y + 18, kSlateDim);
         text(cr, kUiFont, "Moves " + moves_text(u->moves) + " of " + std::to_string(unit_info(u->type).moves),
              tx, y + 36, u->moves > 0 ? kSlateGood : kSlateDim);
+        if (u->hp < kUnitHp) {
+            text_right(cr, kSmallBold, "HP " + std::to_string(u->hp) + "/" + std::to_string(kUnitHp), R, y + 1,
+                       u->hp * 2 > kUnitHp ? kSlateGold : kSlateBad);
+        }
+        {
+            // Hit points under the counter.
+            const double bw = 64;
+            fill(cr, L + 4, y + 66, bw, 3, kSlatePanel);
+            fill(cr, L + 4, y + 66, bw * u->hp / kUnitHp, 3, u->hp * 2 > kUnitHp ? kSlateGood : kSlateBad);
+        }
         const Tile &t = m.at(u->x, u->y);
         std::string where = terrain_info(t.terrain).name;
         if (t.special) where = terrain_info(t.terrain).special;
-        if (t.road) where += ", Road";
+        if (t.railroad) where += ", Railroad";
+        else if (t.road) where += ", Road";
+        if (t.pollution) where += ", Pollution";
         if (t.irrigation) where += ", Irr.";
         if (t.mine) where += ", Mine";
         text(cr, kUiFont, where, tx, y + 54, kSlateDim);
@@ -1348,14 +1480,19 @@ void App::draw_sidebar(cairo_t *cr)
         icons.push_back(art::sprite(done_rows()));
     }
     const bool settlers = u && (unit_info(u->type).flags & kSettlers);
-    const char keys[8] = {'b', 'r', 'i', 'm', 'f', 's', 'w', ' '};
+    char keys[8] = {'b', 'r', 'i', 'm', 'f', 's', 'w', ' '};
     const char *labels[8] = {"B", "R", "I", "M", "F", "S", "W", "\u2423"};
+    const bool cleanup = settlers && g().can_work(*u, Order::Clean);
+    if (cleanup) {
+        keys[4] = 'p';   // the fortify slot cleans up pollution under Settlers
+        labels[4] = "P";
+    }
     bool enabled[8];
     enabled[0] = settlers;
-    enabled[1] = settlers && g().can_work(*u, Order::Road);
+    enabled[1] = settlers && (g().can_work(*u, Order::Road) || g().can_work(*u, Order::Railroad));
     enabled[2] = settlers && g().can_work(*u, Order::Irrigate);
     enabled[3] = settlers && g().can_work(*u, Order::Mine);
-    enabled[4] = u && (!settlers || g().can_work(*u, Order::Fortress));
+    enabled[4] = u && (!settlers || cleanup || g().can_work(*u, Order::Fortress));
     enabled[5] = enabled[6] = enabled[7] = u != nullptr;
     const double cell = 60, bs = 54;
     for (int i = 0; i < 8; ++i) {
@@ -1411,15 +1548,25 @@ void App::draw_status(cairo_t *cr)
     if (goto_mode_) {
         tool = "Go To: click a square  [Esc]";
     } else if (const Unit *u = g().unit(active_)) {
-        tool = std::string(unit_info(u->type).name) + ((unit_info(u->type).flags & kSettlers) ? ": B R I M" : ": F S W G");
+        tool = std::string(unit_info(u->type).name) + ((unit_info(u->type).flags & kSettlers) ? (g().can_work(*u, Order::Clean) ? ": B R I M P" : ": B R I M") : ": F S W G");
     }
-    const Metrics tm = measure(cr, kBoldFont, tool);
-    double right = geo_.win_w - 10 - tm.w;
-    if (!tool.empty()) text(cr, kBoldFont, tool, right, ty, kSlateGold);
-    const std::string hint = "Arrows move \u00b7 Enter ends turn";
-    const Metrics hm2 = measure(cr, kUiFont, hint);
-    right -= 24 + hm2.w;
-    text(cr, kUiFont, hint, right, ty, kSlateDim);
+    double right = geo_.win_w - 10;
+    if (pad_hints()) {
+        // Controller hints (City 2 style): key caps for the pad in hand.
+        if (goto_mode_) {
+            right = draw_pad_hints(cr, right, ty, {{"D-pad", "cursor"}, {glyphs_.a, "go here"}, {glyphs_.b, "cancel"}}) + 16 - 24;
+        } else {
+            right = draw_pad_hints(cr, right, ty, map_pad_hints()) + 16 - 24;
+        }
+    } else {
+        const Metrics tm = measure(cr, kBoldFont, tool);
+        right -= tm.w;
+        if (!tool.empty()) text(cr, kBoldFont, tool, right, ty, kSlateGold);
+        const std::string hint = "Arrows move \u00b7 Enter ends turn";
+        const Metrics hm2 = measure(cr, kUiFont, hint);
+        right -= 24 + hm2.w;
+        text(cr, kUiFont, hint, right, ty, kSlateDim);
+    }
     // The news itself, clipped before the hints.
     cairo_save(cr);
     cairo_rectangle(cr, 10 + tw + 10, y, right - 24 - (10 + tw + 10), geo_.status_h);

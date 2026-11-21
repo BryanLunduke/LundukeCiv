@@ -405,6 +405,9 @@ void paint_roads(Canvas &cv)
                         if (!(dx || dy) || !cv.w.at(wx + dx, wy + dy).road) {
                             continue;
                         }
+                        if (t.rail && cv.w.at(wx + dx, wy + dy).rail) {
+                            continue;   // the railroad pass draws this link
+                        }
                         const double ex = cx + dx * 16.0, ey = cy + dy * 16.0;
                         walk_line(cx, cy, ex, ey, [&](double x, double y, double) {
                             if (pass == 0) {
@@ -421,6 +424,95 @@ void paint_roads(Canvas &cv)
                     }
                 }
             }
+        }
+    }
+}
+
+// Railroads: a dark ballast bed, wooden sleepers across it and two steel
+// rails along it, from the square's middle to each railroad neighbour.
+void paint_rails(Canvas &cv)
+{
+    for (int pass = 0; pass < 3; ++pass) {
+        for (int ty = 0; ty < cv.rows; ++ty) {
+            for (int tx = 0; tx < cv.cols; ++tx) {
+                const int wx = cv.tx0 + tx, wy = cv.ty0 + ty;
+                if (!cv.w.at(wx, wy).rail) {
+                    continue;
+                }
+                const double cx = tx * kTile + 15.5, cy = ty * kTile + 15.5;
+                int links = 0;
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        if (!(dx || dy) || !cv.w.at(wx + dx, wy + dy).rail) {
+                            continue;
+                        }
+                        ++links;
+                        const double len = std::sqrt(static_cast<double>(dx * dx + dy * dy));
+                        const double nx = -dy / len, ny = dx / len;   // across the line
+                        const double ex = cx + dx * 16.0, ey = cy + dy * 16.0;
+                        if (pass == 0) {
+                            walk_line(cx, cy, ex, ey, [&](double x, double y, double) { disc(cv.pm, x, y, 3.0, rgb(0x3A3634)); });
+                        } else if (pass == 1) {
+                            const double span = 16.0 * len;
+                            for (double d = 2.0; d < span; d += 4.0) {
+                                const double px = cx + dx * 16.0 * d / span, py = cy + dy * 16.0 * d / span;
+                                walk_line(px - nx * 3.4, py - ny * 3.4, px + nx * 3.4, py + ny * 3.4,
+                                          [&](double x, double y, double) { cv.pm.set(static_cast<int>(x), static_cast<int>(y), rgb(0x6E4C2C)); });
+                            }
+                        } else {
+                            for (int side = -1; side <= 1; side += 2) {
+                                const double ox = nx * 1.6 * side, oy = ny * 1.6 * side;
+                                walk_line(cx + ox, cy + oy, ex + ox, ey + oy, [&](double x, double y, double) {
+                                    cv.pm.set(static_cast<int>(x), static_cast<int>(y), rgb(side < 0 ? 0xD8DCE4 : 0x9AA0AA));
+                                });
+                            }
+                        }
+                    }
+                }
+                if (!links && pass == 0) {
+                    // A lone stretch: a short east-west siding.
+                    for (int x = -7; x <= 7; ++x) {
+                        for (int y = -2; y <= 2; ++y) cv.pm.set(static_cast<int>(cx) + x, static_cast<int>(cy) + y, rgb(0x3A3634));
+                    }
+                    for (int x = -6; x <= 6; x += 3) {
+                        for (int y = -3; y <= 3; ++y) cv.pm.set(static_cast<int>(cx) + x, static_cast<int>(cy) + y, rgb(0x6E4C2C));
+                    }
+                    for (int x = -7; x <= 7; ++x) {
+                        cv.pm.set(static_cast<int>(cx) + x, static_cast<int>(cy) - 2, rgb(0xD8DCE4));
+                        cv.pm.set(static_cast<int>(cx) + x, static_cast<int>(cy) + 1, rgb(0x9AA0AA));
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Pollution: a sooty, oily smear over the square -- grey-brown puffs with a
+// dithered edge, black specks and a sickly green sheen.
+void paint_pollution(Canvas &cv, int ox, int oy, int seed)
+{
+    struct Puff { double x, y, r; };
+    const Puff puffs[] = {{9, 11, 6.5}, {20, 9, 5.5}, {15, 19, 7.5}, {24, 21, 5.0}, {7, 23, 4.5}};
+    for (int y = 0; y < kTile; ++y) {
+        for (int x = 0; x < kTile; ++x) {
+            double best = 9, lit = 0;
+            for (const Puff &p : puffs) {
+                const double dx = x + 0.5 - p.x, dy = y + 0.5 - p.y;
+                const double d = std::sqrt(dx * dx + dy * dy) / p.r;
+                if (d < best) {
+                    best = d;
+                    lit = -(dx + dy) / p.r;   // light from the top left
+                }
+            }
+            if (best > 1.0) continue;
+            const bool edge = best > 0.78;
+            if (edge && ((x + y + seed) & 1)) continue;   // ragged, dithered rim
+            Argb c = rgb(0x5E5850);
+            if (best < 0.45) c = rgb(0x48443E);
+            if (!edge && lit > 0.55 && best > 0.35) c = (x + y) & 1 ? rgb(0x9A9488) : rgb(0x7E786C);
+            if (!edge && ((x * 7 + y * 13 + seed) % 23) == 0) c = rgb(0x141210);
+            if (!edge && best > 0.5 && best < 0.62 && ((x + 2 * y + seed) % 5) == 0) c = rgb(0x7A8A3A);
+            cv.pm.set(ox + x, oy + y, c);
         }
     }
 }
@@ -644,9 +736,18 @@ Pixmap render_canvas(const PaintWorld &w, int x0, int y0, int cols, int rows)
     }
     paint_rivers(cv);
     paint_roads(cv);
+    paint_rails(cv);
     for (int ty = 0; ty < cv.rows; ++ty) {
         for (int tx = 0; tx < cv.cols; ++tx) {
             paint_features(cv, tx, ty);
+        }
+    }
+    for (int ty = 0; ty < cv.rows; ++ty) {
+        for (int tx = 0; tx < cv.cols; ++tx) {
+            const int wx = cv.tx0 + tx, wy = cv.ty0 + ty;
+            if (w.at(wx, wy).pollution && !w.city_at(wx, wy)) {
+                paint_pollution(cv, tx * kTile, ty * kTile, wx * 3 + wy * 5);
+            }
         }
     }
     for (int ty = 0; ty < cv.rows; ++ty) {
@@ -791,6 +892,8 @@ PaintTile paint_tile(const civ::Tile &t, bool city)
     using CT = civ::Terrain;
     PaintTile p;
     p.road = t.road || city;
+    p.rail = t.railroad;
+    p.pollution = t.pollution;
     p.irrigated = t.irrigation;
     p.mine = t.mine;
     p.hut = t.hut;

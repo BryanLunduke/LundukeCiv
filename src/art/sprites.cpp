@@ -621,6 +621,26 @@ const std::vector<std::string> &figure(civ::UnitType u)
         ".........KooK.........",
         "..........oo..........",
     };
+    // A barbarian chieftain: horned helm, fur cloak, a tall banner.
+    static const std::vector<std::string> leader = {
+        "...............KK.....",
+        "..KK....KKK...KrrK....",
+        ".KwK...KyyyK..KrRrK...",
+        ".KwK..KyYYyyK.KrrrK...",
+        "..KwKKyKKKKyK.KrRK....",
+        "...KKyKssssKK.KbK.....",
+        "......KsKsKK..KbK.....",
+        "......KssssK..KbK.....",
+        ".....KnKSSKnK.KbK.....",
+        "....KnNCCCCNnKsK......",
+        "...KnNKCCCCKNKsK......",
+        "...KnNKCDDCKNnKK......",
+        "...KnNKCCCCKNnK.......",
+        "....KKKBBBBKKK........",
+        "......KnK.KnK.........",
+        ".....KBBK.KBBK........",
+        "......................",
+    };
     // Indexed by civ::UnitType. Militia reuse the old warrior figure; the
     // Cavalry figure is the light horseman.
     static const std::vector<std::string> *const table[] = {
@@ -652,6 +672,7 @@ const std::vector<std::string> &figure(civ::UnitType u)
         &fighter,
         &bomber,
         &nuclear,
+        &leader,
     };
     return *table[static_cast<int>(u)];
 }

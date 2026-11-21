@@ -128,6 +128,7 @@ const UnitInfo kUnits[kUnitTypeCount] = {
     {"Fighter", D::Air, 4, 2, 10, 60, A::Flight, A::None, 0, 0, 1},
     {"Bomber", D::Air, 12, 1, 8, 120, A::AdvancedFlight, A::None, kIgnoreWalls | kSight2, 0, 2},
     {"Nuclear", D::Air, 99, 0, 16, 160, A::Rocketry, A::None, kNuclear | kIgnoreZoc, 0, 1},
+    {"Barbarian Leader", D::Land, 0, 0, 1, 10, A::None, A::None, kNonMilitary | kNoBuild | kIgnoreZoc, 0, 0},
 };
 
 const BuildingInfo kBuildings[kBuildingCount] = {
@@ -154,6 +155,30 @@ const BuildingInfo kBuildings[kBuildingCount] = {
     {"SDI Defense", 200, 4, A::Superconductor, "Protects the city from nuclear attack."},
 };
 
+const WonderInfo kWonders[kWonderCount] = {
+    {"Colossus", 200, A::BronzeWorking, A::Electricity, "+1 trade on every city square that already has trade."},
+    {"Pyramids", 300, A::Masonry, A::Communism, "Revolutions take one turn of Anarchy; any government may be chosen."},
+    {"Great Wall", 300, A::Masonry, A::Gunpowder, "Rivals at war with you accept peace whenever you offer it."},
+    {"Hanging Gardens", 300, A::Pottery, A::Invention, "+1 happy citizen in each of your cities."},
+    {"Lighthouse", 200, A::MapMaking, A::Magnetism, "Your ships move one square more."},
+    {"Great Library", 300, A::Literacy, A::University, "You learn any advance known to two other civilizations."},
+    {"Oracle", 300, A::Mysticism, A::Religion, "Temples in all your cities calm twice as many."},
+    {"Copernicus' Observatory", 300, A::Astronomy, A::Automobile, "Science x2 in this city."},
+    {"Michelangelo's Chapel", 300, A::Religion, A::Communism, "Cathedrals in all your cities calm 50% more."},
+    {"Shakespeare's Theatre", 400, A::Medicine, A::Electronics, "No unhappy citizens in this city."},
+    {"J.S. Bach's Cathedral", 400, A::Religion, A::None, "2 unhappy citizens content in each city on its continent."},
+    {"Magellan's Expedition", 400, A::Navigation, A::None, "Your ships move one square more."},
+    {"Isaac Newton's College", 400, A::TheoryOfGravity, A::NuclearFission, "Libraries and Universities give +83% instead of +50%."},
+    {"Darwin's Voyage", 300, A::Railroad, A::None, "Two advances at once."},
+    {"Women's Suffrage", 600, A::Industrialization, A::None, "Troops abroad cause less unhappiness in a Republic or Democracy."},
+    {"Hoover Dam", 600, A::Electronics, A::None, "A Hydro Plant in each of your cities on its continent."},
+    {"Manhattan Project", 600, A::NuclearFission, A::None, "Every civilization with Rocketry may build Nuclear units."},
+    {"United Nations", 600, A::Communism, A::None, "Rivals at war with you accept peace whenever you offer it."},
+    {"Apollo Program", 600, A::SpaceFlight, A::None, "Spaceship parts may be built; every city in the world is revealed to you."},
+    {"SETI Program", 600, A::Computers, A::None, "Science +50% in all your cities."},
+    {"Cure for Cancer", 600, A::GeneticEngineering, A::None, "+1 happy citizen in each of your cities."},
+};
+
 const GovernmentInfo kGovernments[static_cast<int>(Government::Count)] = {
     {"Anarchy", A::None, 0, 30, 1, -1},
     {"Despotism", A::None, 6, 20, 1, -1},
@@ -168,6 +193,30 @@ const TerrainInfo &terrain_info(Terrain t) { return kTerrain[static_cast<int>(t)
 const AdvanceInfo &advance_info(Advance a) { return kAdvances[static_cast<int>(a)]; }
 const UnitInfo &unit_info(UnitType u) { return kUnits[static_cast<int>(u)]; }
 const BuildingInfo &building_info(Building b) { return kBuildings[static_cast<int>(b)]; }
+const WonderInfo &wonder_info(Wonder w) { return kWonders[static_cast<int>(w)]; }
+std::string wonder_title(int w)
+{
+    const std::string n = kWonders[w].name;
+    if (n.find('\'') != std::string::npos || w == static_cast<int>(Wonder::HooverDam)) return n;
+    return "the " + n;
+}
+const BuildingInfo &building_info(int b)
+{
+    static const BuildingInfo *wonders = [] {
+        static BuildingInfo out[kWonderCount];
+        for (int w = 0; w < kWonderCount; ++w) out[w] = {kWonders[w].name, kWonders[w].cost, 0, kWonders[w].tech, kWonders[w].effect};
+        return out;
+    }();
+    static const BuildingInfo parts[kSpacePartCount] = {
+        {"SS Structural", 80, 0, Advance::SpaceFlight, "A section of the spaceship's frame. Every component and module must be held by one."},
+        {"SS Component", 160, 0, Advance::Plastics, "Fuel and propulsion, in turn. Each pair makes the flight faster."},
+        {"SS Module", 320, 0, Advance::Superconductor, "Habitation, life support and solar panels, in turn. Colonists need all three."},
+    };
+    if (is_wonder_build(b)) return wonders[b - kWonderBase];
+    if (is_space_build(b)) return parts[b - kSpaceBase];
+    if (b < 0 || b >= kBuildingCount) return kBuildings[0];
+    return kBuildings[b];
+}
 const GovernmentInfo &government_info(Government g) { return kGovernments[static_cast<int>(g)]; }
 
 const char *difficulty_name(Difficulty d)

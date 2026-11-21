@@ -8,6 +8,7 @@
 
 #include "game.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <sstream>
 
@@ -15,7 +16,8 @@ namespace civ {
 
 namespace {
 
-constexpr const char *kMagic = "LUNDUKECIV 1";
+constexpr const char *kMagic = "LUNDUKECIV 2";      // written
+constexpr const char *kMagicOld = "LUNDUKECIV 1";   // still read: milestone 1 saves
 
 std::string clean(const std::string &s)
 {
@@ -48,7 +50,7 @@ long long num(const std::vector<std::string> &f, size_t i)
 unsigned tile_word(const Tile &t)
 {
     return static_cast<unsigned>(t.terrain) | (t.special << 4) | (t.hut << 5) | (t.road << 6) | (t.irrigation << 7) |
-           (t.mine << 8) | (t.fortress << 9) | (static_cast<unsigned>(t.explored) << 10);
+           (t.mine << 8) | (t.fortress << 9) | (static_cast<unsigned>(t.explored) << 10) | (t.railroad << 18) | (t.pollution << 19);
 }
 
 } // namespace
@@ -77,20 +79,31 @@ std::string save_game(const Game &g)
           << c.gold << "|" << c.tax << "|" << c.lux << "|" << c.sci << "|" << static_cast<int>(c.govt) << "|"
           << static_cast<int>(c.target) << "|" << c.anarchy << "|" << techs << "|" << static_cast<int>(c.research) << "|"
           << c.bulbs << "|" << c.future << "|" << c.name_next << "|" << static_cast<int>(c.war) << "|"
-          << static_cast<int>(c.contact) << "\n";
+          << static_cast<int>(c.contact) << "|" << static_cast<int>(c.embassy) << "|" << (c.barbarian ? 1 : 0) << "|" << c.structurals << "|"
+          << c.components << "|" << c.modules << "|" << c.launch_turn << "|" << c.arrival_turn << "\n";
     }
     for (const City &c : g.cities) {
         std::string worked;
         for (const auto &w : c.worked) worked += std::to_string(w.first) + "," + std::to_string(w.second) + ";";
         o << "city|" << c.id << "|" << clean(c.name) << "|" << c.owner << "|" << c.x << "|" << c.y << "|" << c.size << "|"
           << c.food << "|" << c.shields << "|" << c.build_unit << "|" << c.build << "|" << c.buildings << "|"
-          << c.entertainers << "|" << c.manual << "|" << c.founded << "|" << c.bought << "|" << worked << "\n";
+          << c.entertainers << "|" << c.manual << "|" << c.founded << "|" << c.bought << "|" << worked << "|";
+        for (size_t r = 0; r < c.routes.size(); ++r) o << (r ? "," : "") << c.routes[r];
+        o << "|" << static_cast<int>(c.stolen) << "\n";
     }
     for (const Unit &u : g.units) {
         o << "unit|" << u.id << "|" << static_cast<int>(u.type) << "|" << u.owner << "|" << u.x << "|" << u.y << "|"
           << u.moves << "|" << u.veteran << "|" << static_cast<int>(u.order) << "|" << u.work << "|" << u.home << "|"
-          << u.goto_x << "|" << u.goto_y << "|" << u.fuel << "|" << u.carried_by << "|" << u.done << "\n";
+          << u.goto_x << "|" << u.goto_y << "|" << u.fuel << "|" << u.carried_by << "|" << u.done << "|" << u.hp << "\n";
     }
+    o << "wonders";
+    for (int w = 0; w < kWonderCount; ++w) o << "|" << g.wonder_city[w];
+    o << "\n";
+    o << "wstart";
+    for (std::uint32_t b : g.wonder_started) o << "|" << b;
+    o << "\n";
+    o << "climate|" << g.warming << "|" << g.warming_events << "\n";
+    o << "space|" << (g.space_win ? 1 : 0) << "\n";
     o << "end\n";
     return o.str();
 }
@@ -103,7 +116,7 @@ bool load_game(const std::string &text, Game &out, std::string *error)
     };
     std::istringstream in(text);
     std::string line;
-    if (!std::getline(in, line) || line != kMagic) return fail("Not a Lunduke Civ saved game.");
+    if (!std::getline(in, line) || (line != kMagic && line != kMagicOld)) return fail("Not a Lunduke Civ saved game.");
     Game g;
     bool ended = false;
     while (std::getline(in, line)) {
@@ -139,6 +152,8 @@ bool load_game(const std::string &text, Game &out, std::string *error)
                     t.mine = (v >> 8) & 1u;
                     t.fortress = (v >> 9) & 1u;
                     t.explored = static_cast<std::uint8_t>((v >> 10) & 0xFFu);
+                    t.railroad = (v >> 18) & 1u;
+                    t.pollution = (v >> 19) & 1u;
                 }
             }
             g.map.label_continents();
@@ -164,6 +179,15 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             c.name_next = static_cast<int>(num(f, 17));
             c.war = static_cast<std::uint8_t>(num(f, 18));
             c.contact = static_cast<std::uint8_t>(num(f, 19));
+            c.embassy = static_cast<std::uint8_t>(num(f, 20));
+            c.barbarian = num(f, 21) != 0;
+            if (f.size() > 26) {
+                c.structurals = static_cast<int>(num(f, 22));
+                c.components = static_cast<int>(num(f, 23));
+                c.modules = static_cast<int>(num(f, 24));
+                c.launch_turn = static_cast<int>(num(f, 25));
+                c.arrival_turn = static_cast<int>(num(f, 26));
+            }
             g.civs.push_back(c);
         } else if (k == "city") {
             City c;
@@ -189,6 +213,14 @@ bool load_game(const std::string &text, Game &out, std::string *error)
                 if (comma == std::string::npos) continue;
                 c.worked.push_back({std::atoi(pair.substr(0, comma).c_str()), std::atoi(pair.substr(comma + 1).c_str())});
             }
+            if (f.size() > 17) {
+                std::istringstream rs(f[17]);
+                std::string id;
+                while (std::getline(rs, id, ',')) {
+                    if (!id.empty() && static_cast<int>(c.routes.size()) < kMaxRoutes) c.routes.push_back(std::atoi(id.c_str()));
+                }
+            }
+            c.stolen = static_cast<std::uint8_t>(num(f, 18));
             g.cities.push_back(c);
         } else if (k == "unit") {
             Unit u;
@@ -209,7 +241,17 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             u.fuel = static_cast<int>(num(f, 13));
             u.carried_by = static_cast<int>(num(f, 14));
             u.done = num(f, 15) != 0;
+            u.hp = f.size() > 16 ? std::clamp(static_cast<int>(num(f, 16)), 1, kUnitHp) : kUnitHp;
             g.units.push_back(u);
+        } else if (k == "wonders") {
+            for (int w = 0; w < kWonderCount && w + 1 < static_cast<int>(f.size()); ++w) g.wonder_city[w] = static_cast<int>(num(f, w + 1));
+        } else if (k == "space") {
+            g.space_win = num(f, 1) != 0;
+        } else if (k == "climate") {
+            g.warming = static_cast<int>(num(f, 1));
+            g.warming_events = static_cast<int>(num(f, 2));
+        } else if (k == "wstart") {
+            for (int c = 0; c < kMaxCivs && c + 1 < static_cast<int>(f.size()); ++c) g.wonder_started[c] = static_cast<std::uint32_t>(num(f, c + 1));
         } else if (k == "end") {
             ended = true;
             break;
@@ -222,6 +264,16 @@ bool load_game(const std::string &text, Game &out, std::string *error)
     }
     for (const Unit &u : g.units) {
         if (u.owner < 0 || u.owner >= static_cast<int>(g.civs.size())) return fail("Unit with a bad owner.");
+    }
+    // Saves from before barbarians: add them.
+    if (g.barbarian_civ() < 0 && static_cast<int>(g.civs.size()) < kMaxCivs) {
+        Civ b;
+        b.name = "Barbarians";
+        b.leader = "Chieftain";
+        b.color = 8;
+        b.barbarian = true;
+        b.gold = 0;
+        g.civs.push_back(b);
     }
     for (City &c : g.cities) g.update_city(c);
     g.refresh_visibility();

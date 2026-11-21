@@ -25,6 +25,8 @@ struct Tile {
     bool irrigation = false;
     bool mine = false;
     bool fortress = false;
+    bool railroad = false;     // on a road: free movement, +50% shields
+    bool pollution = false;    // halves the square's yield until cleaned
     std::uint8_t explored = 0; // bit per civ
     std::uint8_t visible = 0;  // bit per civ, refreshed each turn
     std::uint8_t continent = 0;

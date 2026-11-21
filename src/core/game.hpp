@@ -13,6 +13,7 @@
 #include "rules.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -20,8 +21,9 @@
 namespace civ {
 
 constexpr int kMaxCivs = 8;
+constexpr int kUnitHp = 10;   // hit points of a healthy unit; each lost combat round costs one
 
-enum class Order : std::uint8_t { None, Fortifying, Fortified, Sentry, Goto, Road, Irrigate, Mine, Fortress };
+enum class Order : std::uint8_t { None, Fortifying, Fortified, Sentry, Goto, Road, Irrigate, Mine, Fortress, Railroad, Clean };
 
 struct Unit {
     int id = 0;
@@ -39,6 +41,7 @@ struct Unit {
     int fuel = 0;           // air units: turns left aloft
     int carried_by = -1;    // ship id when aboard
     bool done = false;      // skipped for this turn
+    int hp = kUnitHp;       // damage from combat heals over a few turns
 };
 
 struct CityStats {
@@ -56,6 +59,9 @@ struct CityStats {
     int unhappy = 0;
     int food_box = 0;
     bool disorder = false;
+    int pollution = 0;      // percent chance a turn of polluting a square
+    int base_trade = 0;     // trade from the land, before trade routes
+    int route_trade = 0;    // added by trade routes
 };
 
 struct City {
@@ -75,6 +81,8 @@ struct City {
     bool manual = false;    // the player placed workers by hand
     int founded = 1;
     bool bought = false;
+    std::vector<int> routes;     // trade route partner city ids (up to 3)
+    std::uint8_t stolen = 0;     // civs whose diplomats already stole an advance here
     CityStats stats;
 
     bool has(Building b) const { return (buildings >> static_cast<int>(b)) & 1u; }
@@ -102,14 +110,37 @@ struct Civ {
     int name_next = 0;
     std::uint8_t war = 0;       // bit per civ
     std::uint8_t contact = 0;   // bit per civ
+    std::uint8_t embassy = 0;   // bit per civ we have an embassy with
+    bool barbarian = false;     // the raiders: always at war, never a rival for victory
+    // The spaceship.
+    int structurals = 0;
+    int components = 0;
+    int modules = 0;
+    int launch_turn = -1;       // -1 not launched
+    int arrival_turn = -1;
 };
 
-enum class MsgKind : std::uint8_t { Info, Good, Bad, Combat, Tech, City };
+// What a civ's spaceship adds up to.
+struct SpaceStats {
+    int fuel = 0, propulsion = 0, pairs = 0;
+    int habitation = 0, life_support = 0, solar = 0;
+    int unsupported = 0;        // components and modules no structural holds
+    int population = 0;         // colonists
+    int life_pct = 0;           // life support for the colonists
+    int energy_pct = 0;         // power for habitation and life support
+    int success_pct = 0;
+    int mass = 0;               // tons
+    double years = 0;           // flight time
+    bool viable = false;        // enough of everything to launch
+};
+
+enum class MsgKind : std::uint8_t { Info, Good, Bad, Combat, Tech, City, Wonder };
 
 struct Message {
     int civ = -1;          // -1 everyone
     MsgKind kind = MsgKind::Info;
     std::string text;
+    int wonder = -1;       // MsgKind::Wonder: which one
     int x = -1;
     int y = -1;
     int turn = 0;
@@ -123,7 +154,13 @@ struct CombatResult {
     int def_owner = 0;
     double att = 0;
     double def = 0;
-    double odds = 0;        // attacker's chance
+    double odds = 0;        // attacker's chance to win the whole fight
+    double round_odds = 0;  // attacker's chance to win any one round
+    int att_hp0 = 0;        // hit points going in
+    int def_hp0 = 0;
+    int att_hp = 0;         // hit points left
+    int def_hp = 0;
+    std::vector<std::uint8_t> rounds; // 1: the attacker won that round
     bool attacker_won = false;
     int x = 0;
     int y = 0;
@@ -133,8 +170,19 @@ struct CombatResult {
 };
 
 enum class MoveResult : std::uint8_t {
-    Moved, Attacked, Captured, Boarded, Blocked, NoMoves, NeedWar, Zoc, Failed, Destroyed
+    Moved, Attacked, Captured, Boarded, Blocked, NoMoves, NeedWar, Zoc, Failed, Destroyed,
+    Diplomat,   // a Diplomat reached a foreign city or unit: choose an action
+    Caravan,    // a Caravan reached a city: help a wonder or open a trade route
 };
+
+enum class DiploAction : std::uint8_t { Embassy, Investigate, StealTech, Sabotage, Incite, Bribe, Count };
+const char *diplo_action_name(DiploAction a);
+constexpr int kMaxRoutes = 3;
+
+// Combat is fought in rounds: each round the attacker wins with chance
+// att / (att + def) and the loser of the round loses one hit point; the
+// first side out of hit points loses. This is the chance the attacker wins.
+double combat_win_chance(double att, double def, int att_hp, int def_hp);
 
 struct GameSettings {
     std::uint64_t seed = 1;
@@ -172,10 +220,19 @@ public:
     int next_city_id = 1;
     std::vector<Message> messages;
     CombatResult last_combat;
-    int winner = -1;           // civ that won by conquest
+    int winner = -1;           // civ that won by conquest or by reaching Alpha Centauri
+    bool space_win = false;    // the winner's colonists reached Alpha Centauri
     bool human_dead = false;
     bool all_ai = false;
     std::uint64_t seed = 1;
+    // Wonders of the World: the city id holding each, -1 not built yet,
+    // -2 lost with its city.
+    std::array<int, kWonderCount> wonder_city{};
+    std::array<std::uint32_t, kMaxCivs> wonder_started{};  // announced "is building" bits
+    int warming = 0;           // global warming builds up while squares are polluted
+    int warming_events = 0;
+
+    Game() { wonder_city.fill(-1); }
 
     // --- setup
     static Game create(const GameSettings &s);
@@ -202,12 +259,24 @@ public:
     bool can_build(const City &c, bool unit, int what) const;
     bool unit_available(int civ, UnitType u) const;
 
+    // --- wonders
+    int wonder_owner(Wonder w) const;                  // civ holding it, -1 none
+    bool wonder_built(Wonder w) const { return wonder_city[static_cast<int>(w)] != -1; }
+    bool wonder_obsolete(Wonder w) const;              // its owner knows the advance that ends it
+    bool wonder_active(int civ, Wonder w) const;       // civ holds it and it still works
+    bool wonder_in(const City &c, Wonder w) const;     // in this city and still working
+    const City *wonder_home(Wonder w) const;
+    int wonders_in(const City &c) const;               // count, for the city screen
+
     // --- rules
     Yield tile_yield(int x, int y, int civ, bool centre) const;
     bool tile_free_for(const City &c, int x, int y) const;
     void update_city(City &c);            // recompute stats (and arrange workers unless manual)
     void arrange_workers(City &c);
-    int food_box(const City &c) const { return (c.size + 1) * 10; }
+    // Computer rulers get Civ-style handicaps: cheaper growth and builds on
+    // harder levels, dearer on Chieftain (percent, 100 for humans).
+    int ai_cost_percent(int civ) const;
+    int food_box(const City &c) const { return std::max(4, (c.size + 1) * ai_cost_percent(c.owner) / 10); }
     int size_cap(const City &c) const { return c.has(Building::Aqueduct) ? 99 : 10; }
     int buy_cost(const City &c) const;
     int production_cost(const City &c) const;
@@ -216,7 +285,8 @@ public:
     int move_cost(const Unit &u, int fx, int fy, int tx, int ty) const;
     bool can_enter(const Unit &u, int tx, int ty) const;   // terrain/domain only
     bool zoc_blocks(const Unit &u, int tx, int ty) const;
-    int full_moves(const Unit &u) const { return unit_info(u.type).moves * 3; }
+    int full_moves(const Unit &u) const;
+    bool hoover_here(const City &c) const;   // Hoover Dam powers this city
     int cargo_count(int ship_id) const;
 
     // --- actions
@@ -233,12 +303,48 @@ public:
     bool step_goto(int unit_id);          // one move toward the goto target
     void declare_war(int a, int b);
     void make_peace(int a, int b);
-    bool at_war(int a, int b) const { return a != b && ((civs[a].war >> b) & 1u); }
+    bool at_war(int a, int b) const
+    {
+        return a != b && (civs[a].barbarian || civs[b].barbarian || ((civs[a].war >> b) & 1u));
+    }
     void set_rates(int civ, int tax, int lux, int sci);
     void revolution(int civ, Government g);
     bool buy(int city_id);
     void set_production(int city_id, bool unit, int what);
     void toggle_tile(int city_id, int dx, int dy);
+
+    // --- diplomats and caravans
+    bool diplomat_can(int unit_id, int tx, int ty, DiploAction a) const;
+    bool diplomat_hostile(DiploAction a) const { return a != DiploAction::Embassy && a != DiploAction::Investigate; }
+    int incite_cost(const City &c, int civ) const;   // gold, -1 if it cannot be incited
+    int bribe_cost(const Unit &u, int civ) const;
+    // Carries out the action; the Diplomat is spent. Returns what happened.
+    std::string diplomat_act(int unit_id, int tx, int ty, DiploAction a);
+    bool caravan_can_help(const Unit &u, const City &c) const;
+    bool caravan_can_trade(const Unit &u, const City &c) const;
+    int route_value(const City &a, const City &b) const;     // trade per turn added to a
+    int trade_bonus(const Unit &u, const City &c) const;     // one-time gold and bulbs
+    bool caravan_help(int unit_id, int city_id);
+    int caravan_trade(int unit_id, int city_id);              // returns the bonus, -1 on failure
+
+    // --- barbarians
+    int barbarian_civ() const;                      // index, -1 none
+    bool is_barbarian(int civ) const { return civ >= 0 && civ < static_cast<int>(civs.size()) && civs[civ].barbarian; }
+    void spawn_barbarians(bool force_sea = false, bool force_land = false);
+    int ransom(int unit_id, int tx, int ty);        // capture lone barbarian leaders: gold won
+
+    // --- space race
+    bool space_open() const;                        // the Apollo Program stands somewhere
+    SpaceStats space_stats(int civ) const;
+    bool can_launch(int civ) const;
+    bool launch(int civ);
+    int arrival_year(int civ) const;                // -1 if not in flight
+
+    // --- pollution
+    int polluted_squares() const;
+    int pollution_chance(const City &c) const;     // percent per turn
+    int warming_risk() const;                       // percent: how close the next warming is
+    static constexpr int kWarmingThreshold = 600;
 
     // --- turn
     void begin_human_phase();             // goto orders, sentries waking
@@ -270,10 +376,20 @@ private:
     void capture_city(City &c, int new_owner);
     std::string next_city_name(int civ);
     void choose_research_ai(int civ);
+    void complete_wonder(City &c, Wonder w);
+    void announce_wonder_start(const City &c);
     void ai_city(City &c);
     void ai_unit(Unit &u);
     void ai_diplomacy(int civ);
     bool ai_settler(Unit &u);
+    void ai_envoy(Unit &u);    // Diplomats and Caravans
+    void pollute(City &c);
+    void ai_barbarians(int civ);
+    bool barbarian_landing(int bc, UnitType ship, const std::vector<UnitType> &army);
+    bool barbarian_uprising(int bc, const std::vector<UnitType> &army);
+    void global_warming();
+    void space_arrivals();
+    void lose_spaceship(int civ, bool in_flight);
 };
 
 // Save and load as plain text. Version line first.
