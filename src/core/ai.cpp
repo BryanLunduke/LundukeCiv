@@ -161,6 +161,38 @@ void Game::ai_city(City &c)
         {Building::MassTransit, c.size >= 12},
         {Building::RecyclingCenter, c.size >= 12},
     };
+    // Envoys: a Diplomat for embassies (and theft in wartime), Caravans to
+    // speed up our wonders or open trade routes.
+    {
+        int diplomats = 0, caravans = 0;
+        for (const Unit &u : units) {
+            if (u.owner != ci) continue;
+            diplomats += u.type == UnitType::Diplomat;
+            caravans += u.type == UnitType::Caravan;
+        }
+        bool embassy_wanted = false;
+        for (const City &o : cities) {
+            if (o.owner != ci && map.at(o.x, o.y).continent == cont && ((map.at(o.x, o.y).explored >> ci) & 1u) &&
+                (!((civs[ci].embassy >> o.owner) & 1u) || (at_war(ci, o.owner) && !((o.stolen >> ci) & 1u))))
+                embassy_wanted = true;
+        }
+        if (embassy_wanted && diplomats == 0 && own_cities >= 3 && c.size >= 3 && can_build(c, true, static_cast<int>(UnitType::Diplomat)) &&
+            rng.chance(0.2)) {
+            pick(true, static_cast<int>(UnitType::Diplomat));
+            return;
+        }
+        bool wonder_near = false;
+        for (const City &o : cities) {
+            if (o.owner == ci && o.id != c.id && !o.build_unit && is_wonder_build(o.build) && map.at(o.x, o.y).continent == cont &&
+                map.distance(o.x, o.y, c.x, c.y) <= 12)
+                wonder_near = true;
+        }
+        if (can_build(c, true, static_cast<int>(UnitType::Caravan)) && caravans < 1 + own_cities / 4 && c.size >= 4 &&
+            st.shield_surplus >= 3 && !front && ((wonder_near && rng.chance(0.3)) || (static_cast<int>(c.routes.size()) < kMaxRoutes && st.raw.trade >= 5 && rng.chance(0.08)))) {
+            pick(true, static_cast<int>(UnitType::Caravan));
+            return;
+        }
+    }
     // A productive city with the basics takes on a Wonder of the World now
     // and then, one or two at a time per civilization.
     if (c.size >= 5 && st.shield_surplus >= 4 && c.has(Building::Temple) && !front) {
@@ -429,6 +461,85 @@ bool Game::ai_settler(Unit &u)
     return true;
 }
 
+void Game::ai_envoy(Unit &start)
+{
+    const int id = start.id;
+    const int ci = start.owner;
+    const bool diplomat = start.type == UnitType::Diplomat;
+    const int cont = map.at(start.x, start.y).continent;
+    // Pick a city to visit on this landmass.
+    const City *target = nullptr;
+    int best = 1 << 30;
+    for (const City &c : cities) {
+        if (map.at(c.x, c.y).continent != cont) continue;
+        const int d = map.distance(start.x, start.y, c.x, c.y);
+        int score = d;
+        if (diplomat) {
+            if (c.owner == ci || !((map.at(c.x, c.y).explored >> ci) & 1u)) continue;
+            const bool embassy = (civs[ci].embassy >> c.owner) & 1u;
+            const bool steal = at_war(ci, c.owner) && !((c.stolen >> ci) & 1u);
+            if (embassy && !steal) continue;
+        } else {
+            if (c.owner == ci && !c.build_unit && is_wonder_build(c.build)) {
+                score = d - 100;   // a wonder of ours comes first
+            } else {
+                const City *home = city(start.home);
+                if (!home || home->id == c.id || map.distance(home->x, home->y, c.x, c.y) < 9) continue;
+                if (static_cast<int>(home->routes.size()) >= kMaxRoutes) continue;
+                if (std::find(home->routes.begin(), home->routes.end(), c.id) != home->routes.end()) continue;
+                if (c.owner != ci && (at_war(ci, c.owner) || !((map.at(c.x, c.y).explored >> ci) & 1u))) continue;
+                score = d - c.size * 2;
+            }
+        }
+        if (score < best) {
+            best = score;
+            target = &c;
+        }
+    }
+    if (!target) {
+        Unit *u = unit(id);
+        if (u && u->order == Order::None) u->order = Order::Sentry;
+        return;
+    }
+    const int tx = target->x, ty = target->y, tid = target->id;
+    for (int guard = 0; guard < 8; ++guard) {
+        Unit *u = unit(id);
+        if (!u || u->moves <= 0) return;
+        u->order = Order::None;
+        if (map.distance(u->x, u->y, tx, ty) <= 1) {
+            const City *c = city(tid);
+            if (!c) return;
+            if (diplomat) {
+                if (!((civs[ci].embassy >> c->owner) & 1u)) diplomat_act(id, tx, ty, DiploAction::Embassy);
+                else if (diplomat_can(id, tx, ty, DiploAction::StealTech)) diplomat_act(id, tx, ty, DiploAction::StealTech);
+                else diplomat_act(id, tx, ty, DiploAction::Sabotage);
+                return;
+            }
+            if (caravan_can_help(*u, *c)) {
+                caravan_help(id, tid);
+                return;
+            }
+            if (caravan_can_trade(*u, *c)) {
+                caravan_trade(id, tid);
+                return;
+            }
+            if (c->owner == ci && (u->x != tx || u->y != ty)) {
+                move(id, tx - u->x, ty - u->y);
+                continue;
+            }
+            u->order = Order::Sentry;
+            return;
+        }
+        int sx = 0, sy = 0;
+        if (!next_step(*u, tx, ty, sx, sy)) {
+            u->order = Order::Sentry;
+            return;
+        }
+        const MoveResult r = move(id, sx, sy);
+        if (r != MoveResult::Moved && r != MoveResult::Caravan) return;
+    }
+}
+
 void Game::ai_unit(Unit &start)
 {
     const int id = start.id;
@@ -438,8 +549,12 @@ void Game::ai_unit(Unit &start)
         ai_settler(start);
         return;
     }
+    if (start.type == UnitType::Diplomat || start.type == UnitType::Caravan) {
+        ai_envoy(start);
+        return;
+    }
     if (info.domain != Domain::Land || !is_military(start.type)) {
-        // Ships, aircraft, diplomats and caravans wait at home for now.
+        // Ships and aircraft wait at home for now.
         Unit *u = unit(id);
         if (u && u->order == Order::None) u->order = Order::Sentry;
         return;

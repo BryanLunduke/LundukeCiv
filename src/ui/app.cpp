@@ -360,6 +360,26 @@ void App::try_move(int dx, int dy)
         dialogs_.insert(dialogs_.begin() + static_cast<long>(before), d);
         return;
     }
+    case MoveResult::Diplomat: {
+        Dialog d;
+        d.kind = DialogKind::DiplomatMenu;
+        d.unit_id = active_;
+        d.tx = tx;
+        d.ty = ty;
+        open(d);
+        return;
+    }
+    case MoveResult::Caravan: {
+        const City *c = g().city_at(tx, ty);
+        if (!c) break;
+        Dialog d;
+        d.kind = DialogKind::CaravanMenu;
+        d.unit_id = active_;
+        d.city_id = c->id;
+        open(d);
+        keep_in_view(tx, ty);
+        return;
+    }
     case MoveResult::Zoc: news_ = "Can't move there: an enemy unit's zone of control."; return;
     case MoveResult::Blocked:
         if (ty >= 0 && ty < g().map.h && g().map.ocean(tx, ty)) news_ = "Your " + std::string(unit_info(u->type).name) + " can't go to sea.";
@@ -381,6 +401,17 @@ void App::do_order(char order)
     const bool settlers = info.flags & kSettlers;
     switch (order) {
     case 'b':
+        if (u->type == UnitType::Caravan) {
+            // In a city: help with its wonder or open a trade route.
+            if (const City *c = g().city_at(u->x, u->y)) {
+                Dialog d;
+                d.kind = DialogKind::CaravanMenu;
+                d.unit_id = active_;
+                d.city_id = c->id;
+                open(d);
+            }
+            return;
+        }
         if (!settlers) return;
         if (const City *c = g().city_at(u->x, u->y)) {
             if (c->owner == human() && g().join_city(active_)) {
@@ -694,6 +725,15 @@ bool App::key(const KeyEvent &k)
             close_top();
             return true;
         }
+        if (d.kind == DialogKind::DiplomatMenu && k.key == Key::Char && k.ch >= '1' && k.ch <= '6') {
+            diplomat_choose(d.unit_id, d.tx, d.ty, static_cast<DiploAction>(k.ch - '1'));
+            return true;
+        }
+        if (d.kind == DialogKind::CaravanMenu && k.key == Key::Char && k.ch >= '1' && k.ch <= '3') {
+            caravan_choose(d.unit_id, d.city_id, k.ch - '1');
+            return true;
+        }
+        if (d.view_only) return true;
         if (d.kind == DialogKind::City && k.ch == 'c') {
             Dialog p;
             p.kind = DialogKind::Production;

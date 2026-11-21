@@ -79,14 +79,16 @@ std::string save_game(const Game &g)
           << c.gold << "|" << c.tax << "|" << c.lux << "|" << c.sci << "|" << static_cast<int>(c.govt) << "|"
           << static_cast<int>(c.target) << "|" << c.anarchy << "|" << techs << "|" << static_cast<int>(c.research) << "|"
           << c.bulbs << "|" << c.future << "|" << c.name_next << "|" << static_cast<int>(c.war) << "|"
-          << static_cast<int>(c.contact) << "\n";
+          << static_cast<int>(c.contact) << "|" << static_cast<int>(c.embassy) << "\n";
     }
     for (const City &c : g.cities) {
         std::string worked;
         for (const auto &w : c.worked) worked += std::to_string(w.first) + "," + std::to_string(w.second) + ";";
         o << "city|" << c.id << "|" << clean(c.name) << "|" << c.owner << "|" << c.x << "|" << c.y << "|" << c.size << "|"
           << c.food << "|" << c.shields << "|" << c.build_unit << "|" << c.build << "|" << c.buildings << "|"
-          << c.entertainers << "|" << c.manual << "|" << c.founded << "|" << c.bought << "|" << worked << "\n";
+          << c.entertainers << "|" << c.manual << "|" << c.founded << "|" << c.bought << "|" << worked << "|";
+        for (size_t r = 0; r < c.routes.size(); ++r) o << (r ? "," : "") << c.routes[r];
+        o << "|" << static_cast<int>(c.stolen) << "\n";
     }
     for (const Unit &u : g.units) {
         o << "unit|" << u.id << "|" << static_cast<int>(u.type) << "|" << u.owner << "|" << u.x << "|" << u.y << "|"
@@ -172,6 +174,7 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             c.name_next = static_cast<int>(num(f, 17));
             c.war = static_cast<std::uint8_t>(num(f, 18));
             c.contact = static_cast<std::uint8_t>(num(f, 19));
+            c.embassy = static_cast<std::uint8_t>(num(f, 20));
             g.civs.push_back(c);
         } else if (k == "city") {
             City c;
@@ -197,6 +200,14 @@ bool load_game(const std::string &text, Game &out, std::string *error)
                 if (comma == std::string::npos) continue;
                 c.worked.push_back({std::atoi(pair.substr(0, comma).c_str()), std::atoi(pair.substr(comma + 1).c_str())});
             }
+            if (f.size() > 17) {
+                std::istringstream rs(f[17]);
+                std::string id;
+                while (std::getline(rs, id, ',')) {
+                    if (!id.empty() && static_cast<int>(c.routes.size()) < kMaxRoutes) c.routes.push_back(std::atoi(id.c_str()));
+                }
+            }
+            c.stolen = static_cast<std::uint8_t>(num(f, 18));
             g.cities.push_back(c);
         } else if (k == "unit") {
             Unit u;

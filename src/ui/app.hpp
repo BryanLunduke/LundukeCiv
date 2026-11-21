@@ -49,6 +49,7 @@ struct KeyEvent {
 enum class DialogKind {
     None, NewGame, Message, Combat, City, Production, Science, Rates, Revolution, SaveLoad, CityName, Cities,
     Foreign, UnitSheet, ConfirmWar, GameOver, Report, Help, WonderBuilt, Wonders,
+    DiplomatMenu, CaravanMenu,
 };
 
 struct Dialog {
@@ -62,6 +63,8 @@ struct Dialog {
     bool saving = false;  // SaveLoad: save or load
     int scroll = 0;
     std::string field;    // CityName text
+    bool view_only = false;   // City: a foreign city a Diplomat investigates
+    int tx = 0, ty = 0;       // DiplomatMenu: the square the Diplomat faces
 };
 
 struct Hot {
@@ -182,6 +185,10 @@ private:
     void draw_help(cairo_t *cr, Dialog &d);
     void draw_wonder_built(cairo_t *cr, Dialog &d);
     void draw_wonders(cairo_t *cr, Dialog &d);
+    void draw_diplomat_menu(cairo_t *cr, Dialog &d);
+    void draw_caravan_menu(cairo_t *cr, Dialog &d);
+    void diplomat_choose(int unit_id, int tx, int ty, civ::DiploAction a);
+    void caravan_choose(int unit_id, int city_id, int choice);
     void draw_title(cairo_t *cr);
 
     struct MenuItem {

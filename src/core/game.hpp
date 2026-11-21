@@ -59,6 +59,8 @@ struct CityStats {
     int unhappy = 0;
     int food_box = 0;
     bool disorder = false;
+    int base_trade = 0;     // trade from the land, before trade routes
+    int route_trade = 0;    // added by trade routes
 };
 
 struct City {
@@ -78,6 +80,8 @@ struct City {
     bool manual = false;    // the player placed workers by hand
     int founded = 1;
     bool bought = false;
+    std::vector<int> routes;     // trade route partner city ids (up to 3)
+    std::uint8_t stolen = 0;     // civs whose diplomats already stole an advance here
     CityStats stats;
 
     bool has(Building b) const { return (buildings >> static_cast<int>(b)) & 1u; }
@@ -105,6 +109,7 @@ struct Civ {
     int name_next = 0;
     std::uint8_t war = 0;       // bit per civ
     std::uint8_t contact = 0;   // bit per civ
+    std::uint8_t embassy = 0;   // bit per civ we have an embassy with
 };
 
 enum class MsgKind : std::uint8_t { Info, Good, Bad, Combat, Tech, City, Wonder };
@@ -143,8 +148,14 @@ struct CombatResult {
 };
 
 enum class MoveResult : std::uint8_t {
-    Moved, Attacked, Captured, Boarded, Blocked, NoMoves, NeedWar, Zoc, Failed, Destroyed
+    Moved, Attacked, Captured, Boarded, Blocked, NoMoves, NeedWar, Zoc, Failed, Destroyed,
+    Diplomat,   // a Diplomat reached a foreign city or unit: choose an action
+    Caravan,    // a Caravan reached a city: help a wonder or open a trade route
 };
+
+enum class DiploAction : std::uint8_t { Embassy, Investigate, StealTech, Sabotage, Incite, Bribe, Count };
+const char *diplo_action_name(DiploAction a);
+constexpr int kMaxRoutes = 3;
 
 // Combat is fought in rounds: each round the attacker wins with chance
 // att / (att + def) and the loser of the round loses one hit point; the
@@ -274,6 +285,20 @@ public:
     void set_production(int city_id, bool unit, int what);
     void toggle_tile(int city_id, int dx, int dy);
 
+    // --- diplomats and caravans
+    bool diplomat_can(int unit_id, int tx, int ty, DiploAction a) const;
+    bool diplomat_hostile(DiploAction a) const { return a != DiploAction::Embassy && a != DiploAction::Investigate; }
+    int incite_cost(const City &c, int civ) const;   // gold, -1 if it cannot be incited
+    int bribe_cost(const Unit &u, int civ) const;
+    // Carries out the action; the Diplomat is spent. Returns what happened.
+    std::string diplomat_act(int unit_id, int tx, int ty, DiploAction a);
+    bool caravan_can_help(const Unit &u, const City &c) const;
+    bool caravan_can_trade(const Unit &u, const City &c) const;
+    int route_value(const City &a, const City &b) const;     // trade per turn added to a
+    int trade_bonus(const Unit &u, const City &c) const;     // one-time gold and bulbs
+    bool caravan_help(int unit_id, int city_id);
+    int caravan_trade(int unit_id, int city_id);              // returns the bonus, -1 on failure
+
     // --- turn
     void begin_human_phase();             // goto orders, sentries waking
     void end_turn();                      // computer players, then a new turn
@@ -310,6 +335,7 @@ private:
     void ai_unit(Unit &u);
     void ai_diplomacy(int civ);
     bool ai_settler(Unit &u);
+    void ai_envoy(Unit &u);    // Diplomats and Caravans
 };
 
 // Save and load as plain text. Version line first.

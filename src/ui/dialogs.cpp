@@ -84,6 +84,8 @@ void App::draw_dialog(cairo_t *cr, Dialog &d)
     case DialogKind::Help: draw_help(cr, d); break;
     case DialogKind::WonderBuilt: draw_wonder_built(cr, d); break;
     case DialogKind::Wonders: draw_wonders(cr, d); break;
+    case DialogKind::DiplomatMenu: draw_diplomat_menu(cr, d); break;
+    case DialogKind::CaravanMenu: draw_caravan_menu(cr, d); break;
     default: break;
     }
 }
@@ -281,16 +283,17 @@ void App::draw_combat(cairo_t *cr, Dialog &d)
 void App::draw_city(cairo_t *cr, Dialog &d)
 {
     City *cp = g().city(d.city_id);
-    if (!cp || cp->owner != human()) {
+    if (!cp || (cp->owner != human() && !d.view_only)) {
         close_top();
         return;
     }
     City &c = *cp;
+    const bool ro = d.view_only;   // a Diplomat's report: look, don't touch
     g().update_city(c);
     const CityStats &s = c.stats;
     const double w = std::min(1040, geo_.win_w - 20), h = std::min(700, geo_.win_h - 20);
     const double x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
-    const std::string title = c.name + "  \u00b7  size " + std::to_string(c.size) + "  \u00b7  " +
+    const std::string title = c.name + (ro ? " (" + g().civs[c.owner].name + ")" : std::string()) + "  \u00b7  size " + std::to_string(c.size) + "  \u00b7  " +
                               with_commas(static_cast<long long>(c.size) * (c.size + 1) / 2 * 10000) + " people";
     double cy = dialog_frame(cr, x, y, w, h, title);
     text_right(cr, kUiFont, year_text(year_for_turn(g().turn)) + "  \u00b7  " + government_info(g().civs[c.owner].govt).name,
@@ -351,7 +354,20 @@ void App::draw_city(cairo_t *cr, Dialog &d)
         cy += 20;
         text(cr, kUiFont, "Upkeep: " + std::to_string(s.shield_upkeep) + " shields, " + std::to_string(s.food_upkeep) + " food",
              L, cy, kSlateDim);
-        cy += 28;
+        cy += 20;
+        if (!c.routes.empty()) {
+            std::string r = "Trade routes:";
+            bool first = true;
+            for (int id : c.routes) {
+                const City *o = g().city(id);
+                if (!o) continue;
+                r += std::string(first ? " " : " \u00b7 ") + o->name + " +" + std::to_string(g().route_value(c, *o));
+                first = false;
+            }
+            text(cr, kUiFont, r, L, cy, kSlateGold, 1.0, static_cast<int>(lw));
+            cy += 20;
+        }
+        cy += 8;
     }
     section(cr, "FOOD STORAGE", L, cy, L + lw);
     cy += 20;
@@ -378,7 +394,7 @@ void App::draw_city(cairo_t *cr, Dialog &d)
         double ux = L;
         int shown = 0;
         for (const Unit &u : g().units) {
-            if (u.x != c.x || u.y != c.y || u.owner != human()) continue;
+            if (u.x != c.x || u.y != c.y || u.owner != c.owner) continue;
             if (shown++ >= 9) break;
             paint_pixmap(cr, art::unit_card(u.type, civ_colors(g().civs[u.owner].color), 0, u.veteran), ux, cy, 1);
             ux += 36;
@@ -458,7 +474,7 @@ void App::draw_city(cairo_t *cr, Dialog &d)
                         }
                     }
                 }
-                if (!(ddx == 0 && ddy == 0) || true) {
+                if (!ro) {
                     const int cid = c.id;
                     hot(tx, ty, t, t, [this, cid, ddx, ddy] { g().toggle_tile(cid, ddx, ddy); });
                 }
@@ -468,7 +484,7 @@ void App::draw_city(cairo_t *cr, Dialog &d)
         cairo_set_line_width(cr, 1);
         cairo_rectangle(cr, ox - 0.5, oy - 0.5, 5 * t + 1, 5 * t + 1);
         cairo_stroke(cr);
-        text(cr, kUiFont, c.manual ? "Workers placed by hand. Click the centre for automatic." : "Click a square to move a worker.",
+        text(cr, kUiFont, ro ? "Your Diplomat's report: a look inside a foreign city." : (c.manual ? "Workers placed by hand. Click the centre for automatic." : "Click a square to move a worker."),
              mx, oy + 5 * t + 8, kSlateDim, 1.0, 320);
     }
 
@@ -512,9 +528,9 @@ void App::draw_city(cairo_t *cr, Dialog &d)
         text(cr, kTagFont, std::to_string(c.shields) + " / " + std::to_string(cost) + " shields \u00b7 " + eta, rx + 12, ry + boxh - 18, kSlateDim);
         ry += boxh + 10;
         const double bw = (rw - 8) / 2;
-        wide_button(cr, rx, ry, bw, 34, "Change", "C", false, hover(rx, ry, bw, 34));
+        wide_button(cr, rx, ry, bw, 34, "Change", "C", false, hover(rx, ry, bw, 34), !ro);
         const int cid = c.id;
-        hot(rx, ry, bw, 34, [this, cid] {
+        if (!ro) hot(rx, ry, bw, 34, [this, cid] {
             Dialog p;
             p.kind = DialogKind::Production;
             p.title = "Change Production";
@@ -525,7 +541,7 @@ void App::draw_city(cairo_t *cr, Dialog &d)
         const bool can_buy = price > 0 && !c.bought && g().civs[c.owner].gold >= price;
         wide_button(cr, rx + bw + 8, ry, bw, 34, price > 0 ? "Buy " + with_commas(price) + "g" : "Buy", "B", false,
                     hover(rx + bw + 8, ry, bw, 34), can_buy);
-        if (can_buy) hot(rx + bw + 8, ry, bw, 34, [this, cid] { g().buy(cid); });
+        if (can_buy && !ro) hot(rx + bw + 8, ry, bw, 34, [this, cid] { g().buy(cid); });
         ry += 48;
     }
     section(cr, "IMPROVEMENTS", rx, ry, rr);
@@ -941,6 +957,14 @@ void App::draw_foreign(cairo_t *cr, Dialog &d)
         text(cr, kBoldFont, met ? "The " + c.name + " \u00b7 " + c.leader : "Unknown people", L + 50, cy + 8, kSlateInk);
         std::string status = !c.alive ? "Destroyed" : (!met ? "Not yet met" : (g().at_war(me, k) ? "At war" : "At peace"));
         if (met && c.alive) status += " \u00b7 " + std::to_string(ncity) + " cities \u00b7 " + government_info(c.govt).name;
+        const bool embassy = (g().civs[me].embassy >> k) & 1u;
+        if (met && c.alive && embassy) {
+            status += " \u00b7 " + with_commas(c.gold) + " gold \u00b7 " + std::to_string(g().techs_known(k)) + " advances";
+            if (c.research != Advance::None) status += std::string(" \u00b7 studying ") + advance_info(c.research).name;
+        }
+        if (met && c.alive) {
+            text_right(cr, kTagFont, embassy ? "EMBASSY" : "NO EMBASSY", R - 182, cy + 10, embassy ? kSlateGood : kSlateEdge);
+        }
         text(cr, kUiFont, status, L + 50, cy + 30, g().at_war(me, k) ? kSlateBad : kSlateDim);
         if (met && c.alive) {
             const bool war = g().at_war(me, k);
@@ -1180,6 +1204,176 @@ void App::draw_wonders(cairo_t *cr, Dialog &d)
     const double bx = x + w - 24 - 140, by = y + h - 54;
     wide_button(cr, bx, by, 140, 38, "Close", "Esc", true, hover(bx, by, 140, 38));
     hot(bx, by, 140, 38, [this] { close_top(); });
+}
+
+// A Diplomat faces a foreign city or unit: the six actions of the DOS game.
+void App::draw_diplomat_menu(cairo_t *cr, Dialog &d)
+{
+    const Unit *u = g().unit(d.unit_id);
+    if (!u) {
+        close_top();
+        return;
+    }
+    const int me = human();
+    const City *c = g().city_at(d.tx, d.ty);
+    const int them = c ? c->owner : g().owner_at(d.tx, d.ty);
+    const double w = 700, h = 520, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    std::string where;
+    if (c) where = c->name + " \u00b7 the " + g().civs[them].name;
+    else if (them >= 0) where = "a unit of the " + g().civs[them].name;
+    double cy = dialog_frame(cr, x, y, w, h, "Diplomat: " + where);
+    const double L = x + 24, R = x + w - 24;
+    paint_pixmap(cr, art::unit_card(UnitType::Diplomat, civ_colors(g().civs[me].color)), L, cy, 2);
+    const bool war = them >= 0 && g().at_war(me, them);
+    text(cr, kUiFont,
+         std::string(war ? "We are at war with them." : "We are at peace with them: hostile acts (marked) mean war.") +
+             " The Diplomat is spent on any action. Treasury: " + with_commas(g().civs[me].gold) + " gold.",
+         L + 76, cy + 4, kSlateDim, 1.0, static_cast<int>(R - L - 76));
+    cy += 72;
+    for (int a = 0; a < static_cast<int>(DiploAction::Count); ++a) {
+        const DiploAction act = static_cast<DiploAction>(a);
+        const bool ok = g().diplomat_can(d.unit_id, d.tx, d.ty, act);
+        std::string note;
+        switch (act) {
+        case DiploAction::Embassy:
+            note = c && ((g().civs[me].embassy >> them) & 1u) ? "We already have an embassy." : "See their treasury, advances and plans.";
+            break;
+        case DiploAction::Investigate: note = "A look inside the city."; break;
+        case DiploAction::StealTech: note = c && ((c->stolen >> me) & 1u) ? "Already robbed by our agents." : "Take one advance they know and we don't."; break;
+        case DiploAction::Sabotage: note = "Destroy production or a building."; break;
+        case DiploAction::Incite: {
+            const int cost = c ? g().incite_cost(*c, me) : -1;
+            note = !c ? "Only a city can revolt." : (cost < 0 ? "A capital never revolts." : "The city joins us for " + with_commas(cost) + " gold.");
+            break;
+        }
+        case DiploAction::Bribe: {
+            const std::vector<int> here = g().units_at(d.tx, d.ty);
+            if (c || here.size() != 1) note = "Only a lone unit outside a city.";
+            else if (const Unit *v = g().unit(here.front())) note = std::string("The ") + unit_info(v->type).name + " joins us for " + with_commas(g().bribe_cost(*v, me)) + " gold.";
+            break;
+        }
+        default: break;
+        }
+        const bool hv = ok && hover(L, cy, R - L, 48);
+        round_rect(cr, L, cy, R - L, 48, 6);
+        set(cr, hv ? hex(0x354154) : hex(0x29323F));
+        cairo_fill(cr);
+        text(cr, kSmallBold, std::to_string(a + 1), L + 12, cy + 15, ok ? kSlateGold : kSlateEdge);
+        text(cr, kBoldFont, diplo_action_name(act), L + 34, cy + 5, ok ? kSlateInk : kSlateEdge);
+        text(cr, kTagFont, note, L + 34, cy + 28, ok ? kSlateDim : kSlateEdge);
+        if (g().diplomat_hostile(act) && !war) text_right(cr, kTagFont, "ACT OF WAR", R - 12, cy + 16, ok ? kSlateBad : kSlateEdge);
+        if (ok) {
+            const int uid = d.unit_id, tx = d.tx, ty = d.ty;
+            hot(L, cy, R - L, 48, [this, uid, tx, ty, act] { diplomat_choose(uid, tx, ty, act); });
+        }
+        cy += 54;
+    }
+    const double bx = R - 140, by = y + h - 54;
+    wide_button(cr, bx, by, 140, 38, "Cancel", "Esc", false, hover(bx, by, 140, 38));
+    hot(bx, by, 140, 38, [this] { close_top(); });
+}
+
+void App::diplomat_choose(int unit_id, int tx, int ty, DiploAction a)
+{
+    if (!g().diplomat_can(unit_id, tx, ty, a)) return;
+    close_top();
+    const City *c = g().city_at(tx, ty);
+    const int cid = c ? c->id : -1;
+    g().diplomat_act(unit_id, tx, ty, a);
+    refresh_terrain();
+    if (a == DiploAction::Investigate && cid >= 0) {
+        collect_news(false);
+        dialogs_.clear();
+        Dialog v;
+        v.kind = DialogKind::City;
+        v.city_id = cid;
+        v.view_only = true;
+        open(v);
+    } else {
+        collect_news(false);
+    }
+    select_next(true);
+}
+
+// A Caravan reaches a city: help with a wonder, open a trade route, or go on.
+void App::draw_caravan_menu(cairo_t *cr, Dialog &d)
+{
+    const Unit *u = g().unit(d.unit_id);
+    const City *c = g().city(d.city_id);
+    if (!u || !c) {
+        close_top();
+        return;
+    }
+    const int me = human();
+    const double w = 660, h = 360, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, "Caravan in " + c->name);
+    const double L = x + 24, R = x + w - 24;
+    paint_pixmap(cr, art::unit_card(UnitType::Caravan, civ_colors(g().civs[me].color)), L, cy, 2);
+    const City *home = g().city(u->home);
+    text(cr, kUiFont,
+         std::string("From ") + (home ? home->name : std::string("no home city")) + ". " +
+             (c->owner == me ? "One of our cities." : "A city of the " + g().civs[c->owner].name + "."),
+         L + 76, cy + 4, kSlateDim, 1.0, static_cast<int>(R - L - 76));
+    cy += 72;
+    struct Opt {
+        std::string name, note;
+        bool ok;
+    };
+    std::vector<Opt> opts;
+    const bool help = g().caravan_can_help(*u, *c);
+    opts.push_back({"Help Build Wonder",
+                    help ? "Adds " + std::to_string(unit_info(UnitType::Caravan).cost) + " shields to " + wonder_title(c->build - kWonderBase) + "."
+                         : "The city is not building a Wonder of the World.",
+                    help});
+    const bool trade = g().caravan_can_trade(*u, *c);
+    std::string tnote;
+    if (trade) {
+        tnote = "About " + std::to_string(g().trade_bonus(*u, *c)) + " gold and bulbs now, and +" + std::to_string(g().route_value(*home, *c)) +
+                " trade a turn in " + home->name + ".";
+    } else if (!home) {
+        tnote = "The Caravan has no home city.";
+    } else if (g().map.distance(home->x, home->y, c->x, c->y) < 9) {
+        tnote = "Too close to " + home->name + " (9 squares or more).";
+    } else {
+        tnote = home->name + " has no room for another route with this city.";
+    }
+    opts.push_back({"Establish Trade Route", tnote, trade});
+    if (c->owner == me) opts.push_back({"Keep Moving", "Stay in the city for now.", true});
+    for (size_t i = 0; i < opts.size(); ++i) {
+        const bool hv = opts[i].ok && hover(L, cy, R - L, 48);
+        round_rect(cr, L, cy, R - L, 48, 6);
+        set(cr, hv ? hex(0x354154) : hex(0x29323F));
+        cairo_fill(cr);
+        text(cr, kSmallBold, std::to_string(i + 1), L + 12, cy + 15, opts[i].ok ? kSlateGold : kSlateEdge);
+        text(cr, kBoldFont, opts[i].name, L + 34, cy + 5, opts[i].ok ? kSlateInk : kSlateEdge);
+        text(cr, kTagFont, opts[i].note, L + 34, cy + 28, opts[i].ok ? kSlateDim : kSlateEdge);
+        if (opts[i].ok) {
+            const int uid = d.unit_id, cid = d.city_id, k = static_cast<int>(i);
+            hot(L, cy, R - L, 48, [this, uid, cid, k] { caravan_choose(uid, cid, k); });
+        }
+        cy += 54;
+    }
+    const double bx = R - 140, by = y + h - 54;
+    wide_button(cr, bx, by, 140, 38, "Cancel", "Esc", false, hover(bx, by, 140, 38));
+    hot(bx, by, 140, 38, [this] { close_top(); });
+}
+
+void App::caravan_choose(int unit_id, int city_id, int choice)
+{
+    const Unit *u = g().unit(unit_id);
+    const City *c = g().city(city_id);
+    if (!u || !c) return;
+    if (choice == 0 && !g().caravan_can_help(*u, *c)) return;
+    if (choice == 1 && !g().caravan_can_trade(*u, *c)) return;
+    if (choice == 2 && c->owner != human()) return;
+    close_top();
+    if (choice == 0) g().caravan_help(unit_id, city_id);
+    else if (choice == 1) g().caravan_trade(unit_id, city_id);
+    else {
+        if (Unit *m = g().unit(unit_id)) m->done = true;
+    }
+    collect_news(false);
+    select_next(true);
 }
 
 } // namespace ui

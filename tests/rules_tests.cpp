@@ -645,13 +645,118 @@ static void test_wonders()
     CHECK(load_game(old, m));
 }
 
+static void test_envoys()
+{
+    Game g = flat_game();
+    place(g, 1, UnitType::Settlers, 50, 30);
+    const int s0 = place(g, 0, UnitType::Settlers, 10, 10);
+    const int s1 = place(g, 1, UnitType::Settlers, 22, 10);
+    CHECK(g.found_city(s0, "Home"));
+    CHECK(g.found_city(s1, "Abroad"));
+    const int s1b = place(g, 1, UnitType::Settlers, 30, 20);
+    CHECK(g.found_city(s1b, "Capital2"));
+    City *abroad = nullptr;
+    for (City &c : g.cities) if (c.name == "Abroad") abroad = &c;
+    CHECK(abroad != nullptr);
+    if (!abroad) return;
+    // The first city of civ 1 is its capital: Abroad has the Palace, so it can't be incited.
+    const int dip = place(g, 0, UnitType::Diplomat, 21, 10);
+    CHECK(g.move(dip, 1, 0) == MoveResult::Diplomat);
+    CHECK(g.diplomat_can(dip, 22, 10, DiploAction::Embassy));
+    CHECK(g.diplomat_can(dip, 22, 10, DiploAction::Investigate));
+    CHECK(!g.diplomat_can(dip, 22, 10, DiploAction::Incite));   // a capital
+    CHECK(!g.diplomat_can(dip, 22, 10, DiploAction::Bribe));    // not a lone unit
+    g.diplomat_act(dip, 22, 10, DiploAction::Embassy);
+    CHECK(g.unit(dip) == nullptr);                              // spent
+    CHECK((g.civs[0].embassy >> 1) & 1u);
+    CHECK(!g.at_war(0, 1));                                     // peaceful
+    // Stealing an advance is an act of war and works once per city.
+    g.civs[1].techs[static_cast<int>(Advance::Pottery)] = true;
+    g.civs[0].techs[static_cast<int>(Advance::Pottery)] = false;
+    const int spy = place(g, 0, UnitType::Diplomat, 21, 10);
+    CHECK(g.diplomat_can(spy, 22, 10, DiploAction::StealTech));
+    g.diplomat_act(spy, 22, 10, DiploAction::StealTech);
+    CHECK(g.at_war(0, 1));
+    CHECK(g.civs[0].techs[static_cast<int>(Advance::Pottery)]);
+    const int spy2 = place(g, 0, UnitType::Diplomat, 21, 10);
+    g.civs[1].techs[static_cast<int>(Advance::Writing)] = true;
+    CHECK(!g.diplomat_can(spy2, 22, 10, DiploAction::StealTech));
+    // Incite a city that is not a capital: it joins us with its garrison.
+    City *other = nullptr;
+    for (City &c : g.cities) if (c.name == "Capital2") other = &c;
+    if (other) {
+        const int guard = place(g, 1, UnitType::Phalanx, other->x, other->y);
+        const int agent = place(g, 0, UnitType::Diplomat, other->x - 1, other->y);
+        g.civs[0].gold = 100000;
+        const int cost = g.incite_cost(*other, 0);
+        CHECK(cost > 0);
+        CHECK(g.diplomat_can(agent, other->x, other->y, DiploAction::Incite));
+        g.diplomat_act(agent, other->x, other->y, DiploAction::Incite);
+        CHECK_EQ(other->owner, 0);
+        CHECK_EQ(g.unit(guard)->owner, 0);
+        CHECK_EQ(g.civs[0].gold, 100000 - cost);
+    }
+    // Bribe a lone unit.
+    const int lone = place(g, 1, UnitType::Legion, 40, 40);
+    const int briber = place(g, 0, UnitType::Diplomat, 41, 40);
+    g.civs[0].gold = 5000;
+    CHECK(g.diplomat_can(briber, 40, 40, DiploAction::Bribe));
+    g.diplomat_act(briber, 40, 40, DiploAction::Bribe);
+    CHECK_EQ(g.unit(lone)->owner, 0);
+
+    // Caravans: trade routes and help with wonders.
+    Game h = flat_game();
+    place(h, 1, UnitType::Settlers, 50, 30);
+    const int a = place(h, 0, UnitType::Settlers, 10, 10);
+    const int b = place(h, 0, UnitType::Settlers, 25, 10);
+    h.found_city(a, "West");
+    h.found_city(b, "East");
+    const int west = h.cities[0].id, east = h.cities[1].id;
+    h.city(west)->size = 6;
+    h.city(east)->size = 6;
+    h.update_city(*h.city(west));
+    h.update_city(*h.city(east));
+    const int trade0 = h.city(west)->stats.raw.trade;
+    Unit cu;
+    cu.id = h.next_unit_id++;
+    cu.type = UnitType::Caravan;
+    cu.owner = 0;
+    cu.x = 24;
+    cu.y = 10;
+    cu.home = west;
+    cu.moves = 3;
+    h.units.push_back(cu);
+    CHECK(h.move(cu.id, 1, 0) == MoveResult::Caravan);    // into East
+    CHECK(h.caravan_can_trade(*h.unit(cu.id), *h.city(east)));
+    const int gold0 = h.civs[0].gold;
+    const int bonus = h.caravan_trade(cu.id, east);
+    CHECK(bonus > 0);
+    CHECK_EQ(h.civs[0].gold, gold0 + bonus);
+    CHECK_EQ(static_cast<long long>(h.city(west)->routes.size()), 1);
+    h.update_city(*h.city(west));
+    CHECK(h.city(west)->stats.route_trade >= 1);
+    CHECK_EQ(h.city(west)->stats.raw.trade, trade0 + h.city(west)->stats.route_trade);
+    // Saved with the game.
+    Game l;
+    CHECK(load_game(save_game(h), l));
+    CHECK_EQ(static_cast<long long>(l.city(west)->routes.size()), 1);
+    // Help build a wonder: 50 shields.
+    h.civs[0].techs[static_cast<int>(Advance::BronzeWorking)] = true;
+    h.set_production(east, false, kWonderBase + static_cast<int>(Wonder::Colossus));
+    const int sh = h.city(east)->shields;
+    const int helper = place(h, 0, UnitType::Caravan, 25, 10);
+    h.unit(helper)->home = west;
+    CHECK(h.caravan_help(helper, east));
+    CHECK_EQ(h.city(east)->shields, sh + 50);
+}
+
 int main(int argc, char **argv)
 {
     const std::map<std::string, std::function<void()>> tests = {
         {"calendar", test_calendar},       {"terrain_yields", test_terrain_yields}, {"tech_prereqs", test_tech_prereqs},
         {"units_table", test_units_table}, {"combat_odds", test_combat_odds},       {"city_growth", test_city_growth},
         {"settlers_work", test_settlers_work}, {"movement", test_movement},          {"save_roundtrip", test_save_roundtrip},
-        {"ai_smoke", test_ai_smoke},           {"wonders", test_wonders},
+        {"ai_smoke", test_ai_smoke},           {"wonders", test_wonders}, {"envoys", test_envoys},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();

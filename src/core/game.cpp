@@ -569,6 +569,21 @@ void Game::update_city(City &c)
             raw.shields += y.shields;
             raw.trade += y.trade + (colossus && y.trade > 0 ? 1 : 0);
         }
+        s.base_trade = raw.trade;
+        // Trade routes: a share of both cities' trade.
+        c.routes.erase(std::remove_if(c.routes.begin(), c.routes.end(), [&](int id) { return city(id) == nullptr; }), c.routes.end());
+        for (int id : c.routes) {
+            const City *o = city(id);
+            CityStats mine;
+            mine.base_trade = raw.trade;
+            City probe;
+            probe.x = c.x;
+            probe.y = c.y;
+            probe.owner = c.owner;
+            probe.stats = mine;
+            s.route_trade += route_value(probe, *o);
+        }
+        raw.trade += s.route_trade;
         s.raw = raw;
         // Unit support.
         const GovernmentInfo &gi = government_info(civ.govt);
@@ -742,6 +757,250 @@ int Game::buy_cost(const City &c) const
     if (c.shields == 0) cost *= 2;
     if (c.build_unit) cost = cost * 2; // units cost more to rush
     return cost;
+}
+
+// ---------------------------------------------------------------- diplomats
+
+const char *diplo_action_name(DiploAction a)
+{
+    static const char *n[] = {"Establish Embassy", "Investigate City", "Steal Technology", "Industrial Sabotage",
+                              "Incite a Revolt", "Bribe Unit"};
+    return n[static_cast<int>(a)];
+}
+
+int Game::incite_cost(const City &c, int civ) const
+{
+    (void)civ;
+    if (c.has(Building::Palace)) return -1;   // a capital never revolts
+    // Civ-style: the owner's treasury plus a sum for the city, cheaper far
+    // from their capital and in disorder.
+    int dist = 32;
+    for (const City &o : cities) {
+        if (o.owner == c.owner && o.has(Building::Palace)) dist = map.distance(c.x, c.y, o.x, o.y);
+    }
+    int cost = (civs[c.owner].gold + 1000) * c.size / (dist + 3);
+    for (const Unit &u : units) {
+        if (u.x == c.x && u.y == c.y) cost += unit_info(u.type).cost;
+    }
+    if (c.stats.disorder) cost /= 2;
+    return std::max(50, cost);
+}
+
+int Game::bribe_cost(const Unit &u, int civ) const
+{
+    (void)civ;
+    int dist = 32;
+    for (const City &o : cities) {
+        if (o.owner == u.owner && o.has(Building::Palace)) dist = map.distance(u.x, u.y, o.x, o.y);
+    }
+    return std::max(20, (civs[u.owner].gold + 1000) / (dist + 2) * unit_info(u.type).cost / 10);
+}
+
+bool Game::diplomat_can(int unit_id, int tx, int ty, DiploAction a) const
+{
+    const Unit *u = unit(unit_id);
+    if (!u || u->type != UnitType::Diplomat) return false;
+    tx = map.wrap_x(tx);
+    if (!map.valid_y(ty) || map.distance(u->x, u->y, tx, ty) > 1) return false;
+    const City *c = city_at(tx, ty);
+    const int me = u->owner;
+    if (a == DiploAction::Bribe) {
+        if (c) return false;
+        const std::vector<int> here = units_at(tx, ty);
+        if (here.size() != 1) return false;
+        const Unit *v = unit(here.front());
+        return v && v->owner != me && civs[me].gold >= bribe_cost(*v, me);
+    }
+    if (!c || c->owner == me) return false;
+    switch (a) {
+    case DiploAction::Embassy: return !((civs[me].embassy >> c->owner) & 1u);
+    case DiploAction::Investigate: return true;
+    case DiploAction::StealTech: {
+        if ((c->stolen >> me) & 1u) return false;
+        for (int t = 0; t < kAdvanceCount; ++t) {
+            if (civs[c->owner].techs[t] && !civs[me].techs[t]) return true;
+        }
+        return false;
+    }
+    case DiploAction::Sabotage: return true;
+    case DiploAction::Incite: {
+        const int cost = incite_cost(*c, me);
+        return cost > 0 && civs[me].gold >= cost;
+    }
+    default: return false;
+    }
+}
+
+std::string Game::diplomat_act(int unit_id, int tx, int ty, DiploAction a)
+{
+    if (!diplomat_can(unit_id, tx, ty, a)) return std::string();
+    Unit *u = unit(unit_id);
+    const int me = u->owner;
+    tx = map.wrap_x(tx);
+    City *c = city_at(tx, ty);
+    const int them = c ? c->owner : owner_at(tx, ty);
+    civs[me].contact |= static_cast<std::uint8_t>(1u << them);
+    civs[them].contact |= static_cast<std::uint8_t>(1u << me);
+    // Hostile acts against a people at peace are an incident: war.
+    if (diplomat_hostile(a) && !at_war(me, them)) declare_war(me, them);
+    std::string out;
+    switch (a) {
+    case DiploAction::Embassy:
+        civs[me].embassy |= static_cast<std::uint8_t>(1u << them);
+        out = "Embassy established with the " + civs[them].name + " in " + c->name + ".";
+        break;
+    case DiploAction::Investigate:
+        out = "Your Diplomat reports on " + c->name + ".";
+        break;
+    case DiploAction::StealTech: {
+        std::vector<int> opts;
+        for (int t = 0; t < kAdvanceCount; ++t) {
+            if (civs[them].techs[t] && !civs[me].techs[t]) opts.push_back(t);
+        }
+        const int t = opts[rng.below(static_cast<int>(opts.size()))];
+        learn(me, static_cast<Advance>(t));
+        c->stolen |= static_cast<std::uint8_t>(1u << me);
+        out = std::string("Your Diplomat steals the secret of ") + advance_info(t).name + " from " + c->name + "!";
+        say(them, MsgKind::Bad, "The " + civs[me].name + " steal " + advance_info(t).name + " from " + c->name + ".", c->x, c->y);
+        break;
+    }
+    case DiploAction::Sabotage: {
+        std::vector<int> blds;
+        for (int b = 1; b < kBuildingCount; ++b) {
+            if (c->has(static_cast<Building>(b))) blds.push_back(b);
+        }
+        if (blds.empty() || rng.chance(0.4)) {
+            out = "Your Diplomat sabotages production in " + c->name + ": " + std::to_string(c->shields) + " shields lost.";
+            c->shields = 0;
+        } else {
+            const int b = blds[rng.below(static_cast<int>(blds.size()))];
+            c->remove(static_cast<Building>(b));
+            out = std::string("Your Diplomat destroys the ") + building_info(b).name + " in " + c->name + ".";
+        }
+        say(them, MsgKind::Bad, "Saboteurs from the " + civs[me].name + " strike " + c->name + ".", c->x, c->y);
+        update_city(*c);
+        break;
+    }
+    case DiploAction::Incite: {
+        const int cost = incite_cost(*c, me);
+        civs[me].gold -= cost;
+        const int old = c->owner;
+        c->owner = me;
+        c->manual = false;
+        c->build_unit = true;
+        c->build = static_cast<int>(UnitType::Militia);
+        // Its garrison joins the revolt; units it supported elsewhere disband.
+        std::vector<int> drop;
+        for (Unit &v : units) {
+            if (v.x == c->x && v.y == c->y && v.owner == old) {
+                v.owner = me;
+                v.home = c->id;
+            } else if (v.home == c->id && v.owner == old) {
+                drop.push_back(v.id);
+            }
+        }
+        for (int id : drop) kill_unit(id);
+        out = c->name + " revolts and joins the " + civs[me].name + " for " + std::to_string(cost) + " gold!";
+        say(old, MsgKind::Bad, c->name + " has been incited to revolt by the " + civs[me].name + "!", c->x, c->y);
+        update_city(*c);
+        reveal(me, c->x, c->y, 2);
+        break;
+    }
+    case DiploAction::Bribe: {
+        Unit *v = unit(units_at(tx, ty).front());
+        const int cost = bribe_cost(*v, me);
+        civs[me].gold -= cost;
+        out = std::string("The ") + unit_info(v->type).name + " of the " + civs[v->owner].name + " is bribed to join you for " +
+              std::to_string(cost) + " gold.";
+        say(v->owner, MsgKind::Bad, std::string("Your ") + unit_info(v->type).name + " is bribed by the " + civs[me].name + ".", tx, ty);
+        v->owner = me;
+        v->home = -1;
+        v->order = Order::None;
+        v->moves = 0;
+        break;
+    }
+    default: break;
+    }
+    say(me, a == DiploAction::Investigate ? MsgKind::Info : MsgKind::Good, out, tx, ty);
+    kill_unit(unit_id);
+    if (a == DiploAction::Incite) check_elimination();
+    return out;
+}
+
+// ---------------------------------------------------------------- caravans
+
+bool Game::caravan_can_help(const Unit &u, const City &c) const
+{
+    return u.type == UnitType::Caravan && c.owner == u.owner && !c.build_unit && is_wonder_build(c.build) &&
+           map.distance(u.x, u.y, c.x, c.y) <= 1;
+}
+
+bool Game::caravan_can_trade(const Unit &u, const City &c) const
+{
+    if (u.type != UnitType::Caravan || map.distance(u.x, u.y, c.x, c.y) > 1) return false;
+    const City *home = city(u.home);
+    if (!home || home->id == c.id) return false;
+    if (map.distance(home->x, home->y, c.x, c.y) < 9) return false;
+    if (static_cast<int>(home->routes.size()) >= kMaxRoutes) return false;
+    return std::find(home->routes.begin(), home->routes.end(), c.id) == home->routes.end();
+}
+
+int Game::route_value(const City &a, const City &b) const
+{
+    // Civ-style: a share of both cities' trade; more for foreign partners
+    // and across the sea.
+    int v = (a.stats.base_trade + b.stats.base_trade + 4) / 8;
+    if (a.owner != b.owner) v = v * 3 / 2;
+    if (map.at(a.x, a.y).continent != map.at(b.x, b.y).continent) v = v * 3 / 2;
+    return std::max(1, v);
+}
+
+int Game::trade_bonus(const Unit &u, const City &c) const
+{
+    const City *home = city(u.home);
+    if (!home) return 0;
+    const int d = map.distance(home->x, home->y, c.x, c.y);
+    int bonus = (d + 10) * (home->stats.base_trade + c.stats.base_trade) / 24;
+    if (home->owner != c.owner) bonus *= 2;
+    return std::max(10, bonus);
+}
+
+bool Game::caravan_help(int unit_id, int city_id)
+{
+    Unit *u = unit(unit_id);
+    City *c = city(city_id);
+    if (!u || !c || !caravan_can_help(*u, *c)) return false;
+    c->shields += unit_info(UnitType::Caravan).cost;
+    say(u->owner, MsgKind::City, "Your Caravan helps build " + wonder_title(c->build - kWonderBase) + " in " + c->name + ".", c->x, c->y);
+    kill_unit(unit_id);
+    return true;
+}
+
+int Game::caravan_trade(int unit_id, int city_id)
+{
+    Unit *u = unit(unit_id);
+    City *c = city(city_id);
+    if (!u || !c || !caravan_can_trade(*u, *c)) return -1;
+    City *home = city(u->home);
+    const int bonus = trade_bonus(*u, *c);
+    const int me = u->owner;
+    civs[me].gold += bonus;
+    civs[me].bulbs += bonus;
+    home->routes.push_back(c->id);
+    if (static_cast<int>(c->routes.size()) < kMaxRoutes && std::find(c->routes.begin(), c->routes.end(), home->id) == c->routes.end())
+        c->routes.push_back(home->id);
+    if (c->owner != me) {
+        civs[me].contact |= static_cast<std::uint8_t>(1u << c->owner);
+        civs[c->owner].contact |= static_cast<std::uint8_t>(1u << me);
+    }
+    say(me, MsgKind::Good,
+        "Trade route opened between " + home->name + " and " + c->name + ": " + std::to_string(bonus) + " gold and " + std::to_string(bonus) +
+            " bulbs, and more trade every turn.",
+        c->x, c->y);
+    kill_unit(unit_id);
+    update_city(*home);
+    update_city(*c);
+    return bonus;
 }
 
 // ---------------------------------------------------------------- combat
@@ -948,6 +1207,9 @@ MoveResult Game::move(int unit_id, int dx, int dy)
     if (other >= 0 && other != u->owner) {
         civs[u->owner].contact |= static_cast<std::uint8_t>(1u << other);
         civs[other].contact |= static_cast<std::uint8_t>(1u << u->owner);
+        // Diplomats and Caravans deal with what they meet.
+        if (u->type == UnitType::Diplomat && (city_at(tx, ty) || units_at(tx, ty).size() == 1)) return MoveResult::Diplomat;
+        if (u->type == UnitType::Caravan && city_at(tx, ty)) return MoveResult::Caravan;
         if (!at_war(u->owner, other)) return MoveResult::NeedWar;
         const bool has_units = !units_at(tx, ty).empty();
         if (has_units) {
@@ -1015,6 +1277,10 @@ MoveResult Game::move(int unit_id, int dx, int dy)
     (void)fy;
     reveal(u->owner, tx, ty, (i.flags & kSight2) ? 2 : 1);
     if (map.at(tx, ty).hut && i.domain == Domain::Land) enter_hut(*u);
+    if (u->type == UnitType::Caravan) {
+        const City *c = city_at(tx, ty);
+        if (c && c->owner == u->owner && (caravan_can_help(*u, *c) || caravan_can_trade(*u, *c))) result = MoveResult::Caravan;
+    }
     return result;
 }
 
@@ -1159,10 +1425,12 @@ bool Game::step_goto(int unit_id)
         u->order = Order::None;
         return false;
     }
+    const int bx = u->x, by = u->y;
     const MoveResult r = move(unit_id, sx, sy);
     u = unit(unit_id);
     if (!u) return false;
-    if (r != MoveResult::Moved && r != MoveResult::Boarded) {
+    const bool moved = u->x != bx || u->y != by;
+    if (r != MoveResult::Moved && r != MoveResult::Boarded && !(r == MoveResult::Caravan && moved)) {
         if (r != MoveResult::Failed) u->order = Order::None;
         return false;
     }
