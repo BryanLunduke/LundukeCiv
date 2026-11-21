@@ -105,7 +105,7 @@ static void field(cairo_t *cr, double x, double y, double w, const std::string &
 
 void App::draw_new_game(cairo_t *cr, Dialog &d)
 {
-    const double w = 640, h = 560, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    const double w = 640, h = 500, x = (geo_.win_w - w) / 2, y = game_ ? (geo_.win_h - h) / 2 : std::max(90.0, (geo_.win_h - 152 - h) / 2 + 40);
     double cy = dialog_frame(cr, x, y, w, h, d.title);
     const double L = x + 24, R = x + w - 24;
     section(cr, "DIFFICULTY", L, cy, R);
@@ -166,6 +166,13 @@ void App::draw_new_game(cairo_t *cr, Dialog &d)
     });
     wide_button(cr, R - 372, by, 180, 38, can_cancel ? "Cancel" : "Quit", "Esc", false, hover(R - 372, by, 180, 38));
     hot(R - 372, by, 180, 38, [this] { close_top(); });
+    wide_button(cr, L, by, 180, 38, "Load Game", "Ctrl+L", false, hover(L, by, 180, 38));
+    hot(L, by, 180, 38, [this] {
+        Dialog l;
+        l.kind = DialogKind::SaveLoad;
+        l.title = "Load Game";
+        open(l);
+    });
 }
 
 void App::draw_message(cairo_t *cr, Dialog &d)
@@ -212,11 +219,12 @@ void App::draw_combat(cairo_t *cr, Dialog &d)
             cairo_line_to(cr, cx + 14, cy + 116);
             cairo_stroke(cr);
         }
-        text(cr, kBoldFont, g().civs[owner].name + " " + unit_info(t).name, cx + 124, cy + 20, kSlateInk);
+        text(cr, kTagFont, g().civs[owner].name, cx + 124, cy + 20, kSlateDim);
+        text(cr, kBoldFont, unit_info(t).name, cx + 124, cy + 34, kSlateInk);
         char buf[64];
         std::snprintf(buf, sizeof buf, side == 0 ? "Attack %.1f" : "Defense %.1f", side == 0 ? r.att : r.def);
-        text(cr, kUiFont, buf, cx + 124, cy + 44, kSlateDim);
-        text(cr, kBoldFont, lost ? "Destroyed" : "Victorious", cx + 124, cy + 68, lost ? kSlateBad : kSlateGood);
+        text(cr, kUiFont, buf, cx + 124, cy + 58, kSlateDim);
+        text(cr, kBoldFont, lost ? "Destroyed" : "Victorious", cx + 124, cy + 82, lost ? kSlateBad : kSlateGood);
     }
     cy += 150;
     char odds[96];
@@ -433,7 +441,10 @@ void App::draw_city(cairo_t *cr, Dialog &d)
     section(cr, "PRODUCTION", rx, ry, rr);
     ry += 20;
     {
-        round_rect(cr, rx, ry, rw, 100, 8);
+        double eh = 22;
+        if (!c.build_unit) eh = measure(cr, kUiFont, building_info(c.build).effect, static_cast<int>(rw - 24)).h;
+        const double boxh = std::max(100.0, 34 + eh + 46);
+        round_rect(cr, rx, ry, rw, boxh, 8);
         set(cr, kSlateDeep);
         cairo_fill(cr);
         const int cost = g().production_cost(c);
@@ -455,9 +466,9 @@ void App::draw_city(cairo_t *cr, Dialog &d)
         const int per = std::max(0, s.disorder ? 0 : s.shield_surplus);
         const int left = std::max(0, cost - c.shields);
         const std::string eta = left == 0 ? "done next turn" : (per > 0 ? turns_text((left + per - 1) / per) : "stalled");
-        progress(cr, rx + 12, ry + 70, rw - 24, 8, static_cast<double>(c.shields) / cost, kSlateGold);
-        text(cr, kTagFont, std::to_string(c.shields) + " / " + std::to_string(cost) + " shields \u00b7 " + eta, rx + 12, ry + 82, kSlateDim);
-        ry += 110;
+        progress(cr, rx + 12, ry + boxh - 30, rw - 24, 8, static_cast<double>(c.shields) / cost, kSlateGold);
+        text(cr, kTagFont, std::to_string(c.shields) + " / " + std::to_string(cost) + " shields \u00b7 " + eta, rx + 12, ry + boxh - 18, kSlateDim);
+        ry += boxh + 10;
         const double bw = (rw - 8) / 2;
         wide_button(cr, rx, ry, bw, 34, "Change", "C", false, hover(rx, ry, bw, 34));
         const int cid = c.id;
@@ -757,7 +768,13 @@ void App::draw_saveload(cairo_t *cr, Dialog &d)
         }
         cy += 52;
     }
-    text(cr, kTagFont, save_dir_, L, y + h - 44, kSlateDim);
+    std::string shown = save_dir_;
+    if (shown.size() > 52) {
+        size_t start = shown.size() - 50;
+        while (start < shown.size() && (static_cast<unsigned char>(shown[start]) & 0xC0) == 0x80) ++start;
+        shown = "\u2026" + shown.substr(start);
+    }
+    text(cr, kTagFont, shown, L, y + h - 44, kSlateDim);
     const double bx = R - 140, by = y + h - 54;
     wide_button(cr, bx, by, 140, 38, "Cancel", "Esc", false, hover(bx, by, 140, 38));
     hot(bx, by, 140, 38, [this] { close_top(); });
@@ -896,7 +913,9 @@ void App::draw_unit_sheet(cairo_t *cr, Dialog &d)
         const std::string tech = ui.tech == Advance::None ? "Available at start" : advance_info(ui.tech).name;
         text_center(cr, kTagFont, tech, cx + cw / 2, ccy + 98, ui.tech == Advance::None ? kSlateGood : kSlateGoldDim);
         if (ui.obsolete != Advance::None) {
-            text_center(cr, kTagFont, std::string("Obsolete: ") + advance_info(ui.obsolete).name, cx + cw / 2, ccy + 111, kSlateEdge);
+            std::string obs = std::string("Obsolete: ") + advance_info(ui.obsolete).name;
+            if (measure(cr, kTagFont, obs).w > cw - 6) obs = std::string("Obs. ") + advance_info(ui.obsolete).name;
+            text_center(cr, kTagFont, obs, cx + cw / 2, ccy + 111, kSlateEdge);
         }
     }
     text(cr, kUiFont, "Attack-defense-moves on every counter.", x + 24, y + h - 46, kSlateDim);

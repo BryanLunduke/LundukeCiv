@@ -627,7 +627,14 @@ bool App::key(const KeyEvent &k)
     if (!dialogs_.empty()) {
         Dialog &d = dialogs_.back();
         if (d.kind == DialogKind::NewGame) {
-            if (k.key == Key::Backspace) {
+            if (k.ctrl && (k.ch == 'l' || k.ch == 'o')) {
+                Dialog l;
+                l.kind = DialogKind::SaveLoad;
+                l.title = "Load Game";
+                open(l);
+            } else if (k.ctrl && k.ch == 'q') {
+                quit_ = true;
+            } else if (k.key == Key::Backspace) {
                 pop_utf8(new_game_field_ == 0 ? settings.player_name : (new_game_field_ == 1 ? settings.player_leader : seed_text_));
             } else if (k.key == Key::Tab) {
                 new_game_field_ = (new_game_field_ + 1) % 3;
@@ -956,15 +963,16 @@ void App::render(cairo_t *cr, int w, int h)
 
 void App::draw_title(cairo_t *cr)
 {
-    // A quiet backdrop for the New Game dialog: a row of unit cards.
-    const int n = kUnitTypeCount;
+    // A quiet backdrop for the New Game dialog: the title and two rows of
+    // unit counters along the foot of the screen.
+    text_center(cr, "Sans Bold 30", "LUNDUKE CIV", geo_.win_w / 2.0, 44, kSlateGold);
+    const int n = kUnitTypeCount, per_row = 14;
+    const double gap = (geo_.win_w - 40.0) / per_row;
     for (int i = 0; i < n; ++i) {
         const Pixmap card = art::unit_card(static_cast<UnitType>(i), civ_colors(i % 8));
-        const double x = 40 + (i % 14) * 86, y = geo_.win_h - 200 + (i / 14) * 86;
+        const double x = 20 + (i % per_row) * gap + (gap - 64) / 2, y = geo_.win_h - 152 + (i / per_row) * 72;
         paint_pixmap(cr, card, x, y, 2);
     }
-    text(cr, "Sans Bold 40", "LUNDUKE CIV", 40, 70, kSlateGold);
-    text(cr, kUiFont, "Build an empire to stand the test of time.", 44, 130, kSlateDim);
 }
 
 void App::draw_menubar(cairo_t *cr)
@@ -1303,13 +1311,13 @@ void App::draw_sidebar(cairo_t *cr)
         const Yield yv = g().tile_yield(u->x, u->y, me, false);
         const int counts[3] = {yv.food, yv.shields, yv.trade};
         const char *names[3] = {"FOOD", "SHIELDS", "TRADE"};
-        double ix = L + 2;
+        const double cols[3] = {L + 2, L + 76, L + 166};
         for (int k = 0; k < 3; ++k) {
+            const double ix = cols[k];
             text(cr, kTagFont, names[k], ix, y, kSlateDim);
             const double gx = ix + measure(cr, kTagFont, names[k]).w + 5;
             paint_pixmap(cr, art::yield_icon(k), gx, y - 1, 2);
             text(cr, kSmallBold, std::to_string(counts[k]), gx + 17, y - 1, counts[k] ? kSlateInk : kSlateDim);
-            ix += 82;
         }
         y += 24;
     } else {

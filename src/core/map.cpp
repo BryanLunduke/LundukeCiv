@@ -189,28 +189,46 @@ Map generate_map(const MapSettings &s)
         if (!found) {
             continue;
         }
-        // Step to a neighbour (4-way) each time, preferring lower ground.
+        // Step to a neighbour (4-way) each time, preferring lower ground and
+        // keeping clear of other water, so each river is one thin course.
         std::vector<std::pair<int, int>> path;
+        auto on_path = [&](int px, int py) {
+            for (const auto &p : path) {
+                if (p.first == px && p.second == py) return true;
+            }
+            return false;
+        };
+        const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        path.push_back({x, y});
         for (int step = 0; step < 30; ++step) {
-            int bx = 0, by = 0;
+            int bx = -1, by = -1;
             double best = 1e9;
-            const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
             for (const auto &d : dirs) {
                 const int nx = m.wrap_x(x + d[0]), ny = y + d[1];
-                if (!m.valid_y(ny)) continue;
+                if (!m.valid_y(ny) || on_path(nx, ny)) continue;
                 double e = elev[static_cast<size_t>(ny) * m.w + nx] + rng.unit() * 0.05;
-                if (m.at(nx, ny).terrain == Terrain::River) e += 1.0; // don't loop
+                const bool ends = m.ocean(nx, ny) || m.at(nx, ny).terrain == Terrain::River;
+                if (!ends) {
+                    // Crowding: river or path squares beside the candidate.
+                    for (const auto &d2 : dirs) {
+                        const int qx = m.wrap_x(nx + d2[0]), qy = ny + d2[1];
+                        if (!m.valid_y(qy) || (qx == x && qy == y)) continue;
+                        if (m.at(qx, qy).terrain == Terrain::River || on_path(qx, qy)) e += 0.6;
+                    }
+                }
                 if (e < best) {
                     best = e;
                     bx = nx;
                     by = ny;
                 }
             }
+            if (bx < 0) break;
             x = bx;
             y = by;
-            if (m.ocean(x, y)) {
-                for (auto &p : path) {
-                    Tile &t = m.at(p.first, p.second);
+            if (m.ocean(x, y) || m.at(x, y).terrain == Terrain::River) {
+                // Reached the sea or joined another river.
+                for (size_t i = 1; i < path.size(); ++i) {
+                    Tile &t = m.at(path[i].first, path[i].second);
                     if (t.terrain != Terrain::Mountains && t.terrain != Terrain::Arctic) {
                         t.terrain = Terrain::River;
                     }
