@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Lunduke Civ
+Comment=Build a civilization from 4000 BC
+Exec=lunduke-civ
+Icon=lunduke-civ
+Terminal=false
+Categories=Game;StrategyGame;

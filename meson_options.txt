@@ -1,0 +1,1 @@
+option('game', type: 'boolean', value: true, description: 'Build the SDL3 game (off: rules library and tests only)')
