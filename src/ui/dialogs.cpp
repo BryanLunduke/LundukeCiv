@@ -105,7 +105,7 @@ static void field(cairo_t *cr, double x, double y, double w, const std::string &
 
 void App::draw_new_game(cairo_t *cr, Dialog &d)
 {
-    const double w = 640, h = 500, x = (geo_.win_w - w) / 2, y = game_ ? (geo_.win_h - h) / 2 : std::max(90.0, (geo_.win_h - 152 - h) / 2 + 40);
+    const double w = 640, h = 516, x = (geo_.win_w - w) / 2, y = game_ ? (geo_.win_h - h) / 2 : std::max(90.0, (geo_.win_h - 152 - h) / 2 + 40);
     double cy = dialog_frame(cr, x, y, w, h, d.title);
     const double L = x + 24, R = x + w - 24;
     section(cr, "DIFFICULTY", L, cy, R);
@@ -117,9 +117,10 @@ void App::draw_new_game(cairo_t *cr, Dialog &d)
         hot(bx, cy, bw, 34, [this, i] { settings.difficulty = static_cast<Difficulty>(i); });
     }
     cy += 44;
-    text(cr, kUiFont, "Content citizens per city: " + std::to_string(content_base(settings.difficulty)) +
-                          ". Research costs rise faster on harder levels.", L, cy, kSlateDim);
-    cy += 34;
+    const std::string level_note = "Content citizens per city: " + std::to_string(content_base(settings.difficulty)) +
+                                   ". Research costs rise faster on harder levels.";
+    text(cr, kUiFont, level_note, L, cy, kSlateDim, 1.0, static_cast<int>(R - L));
+    cy += std::max(34.0, static_cast<double>(measure(cr, kUiFont, level_note, static_cast<int>(R - L)).h) + 12);
     section(cr, "CIVILIZATIONS IN THE WORLD", L, cy, R);
     cy += 20;
     for (int n = 2; n <= 7; ++n) {
@@ -155,7 +156,8 @@ void App::draw_new_game(cairo_t *cr, Dialog &d)
     field(cr, L + half + 16, cy, half, seed_text_, new_game_field_ == 2, blink_);
     hot(L + half + 16, cy, half, 34, [this] { new_game_field_ = 2; });
     cy += 52;
-    text(cr, kUiFont, "Tab moves between fields. The other peoples are drawn from history.", L, cy, kSlateDim);
+    text(cr, kUiFont, "Tab moves between fields. The other peoples are drawn from history.", L, cy, kSlateDim, 1.0,
+         static_cast<int>(R - L));
     const double by = y + h - 56;
     const bool can_cancel = game_ != nullptr;
     wide_button(cr, R - 180, by, 180, 38, "Start", "Enter", true, hover(R - 180, by, 180, 38));
@@ -166,8 +168,8 @@ void App::draw_new_game(cairo_t *cr, Dialog &d)
     });
     wide_button(cr, R - 372, by, 180, 38, can_cancel ? "Cancel" : "Quit", "Esc", false, hover(R - 372, by, 180, 38));
     hot(R - 372, by, 180, 38, [this] { close_top(); });
-    wide_button(cr, L, by, 180, 38, "Load Game", "Ctrl+L", false, hover(L, by, 180, 38));
-    hot(L, by, 180, 38, [this] {
+    wide_button(cr, L, by, 196, 38, "Load Game", "Ctrl+L", false, hover(L, by, 196, 38));
+    hot(L, by, 196, 38, [this] {
         Dialog l;
         l.kind = DialogKind::SaveLoad;
         l.title = "Load Game";

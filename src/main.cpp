@@ -11,6 +11,7 @@
 #include <SDL3/SDL_main.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -72,6 +73,14 @@ ui::KeyEvent translate(const SDL_KeyboardEvent &e)
 
 int main(int argc, char **argv)
 {
+#ifdef _WIN32
+    // Render text through fontconfig and the fonts shipped next to the exe
+    // (etc/fonts, share/fonts) so Windows matches the Linux look and metrics.
+    // Setting PANGOCAIRO_BACKEND=win32 beforehand restores native fonts.
+    if (std::getenv("PANGOCAIRO_BACKEND") == nullptr) {
+        _putenv_s("PANGOCAIRO_BACKEND", "fc");
+    }
+#endif
     std::string load_path;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--version")) {

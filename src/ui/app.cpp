@@ -1311,9 +1311,17 @@ void App::draw_sidebar(cairo_t *cr)
         const Yield yv = g().tile_yield(u->x, u->y, me, false);
         const int counts[3] = {yv.food, yv.shields, yv.trade};
         const char *names[3] = {"FOOD", "SHIELDS", "TRADE"};
-        const double cols[3] = {L + 2, L + 76, L + 166};
+        // Three label + icon + number groups spread across the sidebar, so
+        // wider fonts (DejaVu on Windows) never run them together.
+        double widths[3], total = 0;
         for (int k = 0; k < 3; ++k) {
-            const double ix = cols[k];
+            widths[k] = measure(cr, kTagFont, names[k]).w + 5 + 17 + measure(cr, kSmallBold, std::to_string(counts[k])).w;
+            total += widths[k];
+        }
+        const double gap = std::max(6.0, (R - L - 4 - total) / 2);
+        double ix = L + 2;
+        for (int k = 0; k < 3; ++k) {
+            if (k > 0) ix += widths[k - 1] + gap;
             text(cr, kTagFont, names[k], ix, y, kSlateDim);
             const double gx = ix + measure(cr, kTagFont, names[k]).w + 5;
             paint_pixmap(cr, art::yield_icon(k), gx, y - 1, 2);

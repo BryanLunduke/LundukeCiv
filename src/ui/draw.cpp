@@ -13,6 +13,10 @@
 
 namespace ui {
 
+namespace {
+constexpr double kPi = 3.14159265358979323846;
+}
+
 const char *kUiFont = "Sans 13";
 const char *kBoldFont = "Sans Bold 13";
 const char *kMenuFont = "Sans 13";
@@ -38,10 +42,10 @@ void round_rect(cairo_t *cr, double x, double y, double w, double h, double r)
 {
     r = std::min(r, std::min(w, h) / 2.0);
     cairo_new_sub_path(cr);
-    cairo_arc(cr, x + w - r, y + r, r, -M_PI / 2, 0);
-    cairo_arc(cr, x + w - r, y + h - r, r, 0, M_PI / 2);
-    cairo_arc(cr, x + r, y + h - r, r, M_PI / 2, M_PI);
-    cairo_arc(cr, x + r, y + r, r, M_PI, 1.5 * M_PI);
+    cairo_arc(cr, x + w - r, y + r, r, -kPi / 2, 0);
+    cairo_arc(cr, x + w - r, y + h - r, r, 0, kPi / 2);
+    cairo_arc(cr, x + r, y + h - r, r, kPi / 2, kPi);
+    cairo_arc(cr, x + r, y + r, r, kPi, 1.5 * kPi);
     cairo_close_path(cr);
 }
 
