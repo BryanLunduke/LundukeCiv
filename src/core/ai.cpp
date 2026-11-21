@@ -100,6 +100,7 @@ void Game::ai_city(City &c)
     auto pick = [&](bool unit_kind, int what) {
         c.build_unit = unit_kind;
         c.build = what;
+        announce_wonder_start(c);
     };
     const CityStats &st = c.stats;
     // A front: an enemy we are at war with has a city we know of on this
@@ -160,6 +161,28 @@ void Game::ai_city(City &c)
         {Building::MassTransit, c.size >= 12},
         {Building::RecyclingCenter, c.size >= 12},
     };
+    // A productive city with the basics takes on a Wonder of the World now
+    // and then, one or two at a time per civilization.
+    if (c.size >= 5 && st.shield_surplus >= 4 && c.has(Building::Temple) && !front) {
+        int in_progress = 0;
+        std::uint32_t taken = 0;
+        for (const City &o : cities) {
+            if (o.owner == ci && o.id != c.id && !o.build_unit && is_wonder_build(o.build)) {
+                ++in_progress;
+                taken |= 1u << (o.build - kWonderBase);
+            }
+        }
+        if (in_progress < 1 + own_cities / 8 && rng.chance(0.5)) {
+            std::vector<int> open;
+            for (int w = 0; w < kWonderCount; ++w) {
+                if (!((taken >> w) & 1u) && can_build(c, false, kWonderBase + w)) open.push_back(w);
+            }
+            if (!open.empty()) {
+                pick(false, kWonderBase + open[rng.below(static_cast<int>(open.size()))]);
+                return;
+            }
+        }
+    }
     for (const Want &w : wants) {
         if (!w.ok || !can_build(c, false, static_cast<int>(w.b))) continue;
         pick(false, static_cast<int>(w.b));
@@ -210,8 +233,10 @@ void Game::ai_diplomacy(int ci)
     for (int k = 0; k < static_cast<int>(civs.size()); ++k) {
         if (k == ci || !civs[k].alive || !((me.contact >> k) & 1u)) continue;
         if (at_war(ci, k)) {
-            // Tired of a war that goes nowhere.
-            if (turn % 16 == 0 && rng.chance(0.15)) {
+            // Tired of a war that goes nowhere; the Great Wall and the
+            // United Nations bring offers of peace much sooner.
+            const bool wall = wonder_active(k, Wonder::GreatWall) || wonder_active(k, Wonder::UnitedNations);
+            if ((turn % 16 == 0 && rng.chance(0.15)) || (wall && rng.chance(0.2))) {
                 make_peace(ci, k);
                 say(ci, MsgKind::Good, "Peace with the " + civs[k].name + ".");
                 say(k, MsgKind::Good, "The " + me.name + " agree to peace.");

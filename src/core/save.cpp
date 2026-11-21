@@ -16,7 +16,8 @@ namespace civ {
 
 namespace {
 
-constexpr const char *kMagic = "LUNDUKECIV 1";
+constexpr const char *kMagic = "LUNDUKECIV 2";      // written
+constexpr const char *kMagicOld = "LUNDUKECIV 1";   // still read: milestone 1 saves
 
 std::string clean(const std::string &s)
 {
@@ -92,6 +93,12 @@ std::string save_game(const Game &g)
           << u.moves << "|" << u.veteran << "|" << static_cast<int>(u.order) << "|" << u.work << "|" << u.home << "|"
           << u.goto_x << "|" << u.goto_y << "|" << u.fuel << "|" << u.carried_by << "|" << u.done << "|" << u.hp << "\n";
     }
+    o << "wonders";
+    for (int w = 0; w < kWonderCount; ++w) o << "|" << g.wonder_city[w];
+    o << "\n";
+    o << "wstart";
+    for (std::uint32_t b : g.wonder_started) o << "|" << b;
+    o << "\n";
     o << "end\n";
     return o.str();
 }
@@ -104,7 +111,7 @@ bool load_game(const std::string &text, Game &out, std::string *error)
     };
     std::istringstream in(text);
     std::string line;
-    if (!std::getline(in, line) || line != kMagic) return fail("Not a Lunduke Civ saved game.");
+    if (!std::getline(in, line) || (line != kMagic && line != kMagicOld)) return fail("Not a Lunduke Civ saved game.");
     Game g;
     bool ended = false;
     while (std::getline(in, line)) {
@@ -212,6 +219,10 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             u.done = num(f, 15) != 0;
             u.hp = f.size() > 16 ? std::clamp(static_cast<int>(num(f, 16)), 1, kUnitHp) : kUnitHp;
             g.units.push_back(u);
+        } else if (k == "wonders") {
+            for (int w = 0; w < kWonderCount && w + 1 < static_cast<int>(f.size()); ++w) g.wonder_city[w] = static_cast<int>(num(f, w + 1));
+        } else if (k == "wstart") {
+            for (int c = 0; c < kMaxCivs && c + 1 < static_cast<int>(f.size()); ++c) g.wonder_started[c] = static_cast<std::uint32_t>(num(f, c + 1));
         } else if (k == "end") {
             ended = true;
             break;

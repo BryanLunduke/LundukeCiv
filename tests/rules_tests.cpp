@@ -519,13 +519,139 @@ static void test_ai_smoke()
     for (const Unit &u : g.units) CHECK(g.map.valid_y(u.y) && u.x >= 0 && u.x < g.map.w);
 }
 
+static void test_wonders()
+{
+    // The table: 21 wonders, each with a cost and an advance.
+    CHECK_EQ(kWonderCount, 21);
+    for (int w = 0; w < kWonderCount; ++w) {
+        CHECK(wonder_info(w).cost >= 200);
+        CHECK(wonder_info(w).tech != Advance::None);
+        CHECK(std::strcmp(building_info(kWonderBase + w).name, wonder_info(w).name) == 0);
+        CHECK_EQ(building_info(kWonderBase + w).upkeep, 0);
+    }
+    Game g = flat_game();
+    place(g, 1, UnitType::Settlers, 40, 30);  // keeps civ 1 alive
+    const int sid = place(g, 0, UnitType::Settlers, 10, 10);
+    CHECK(g.found_city(sid, "Wonderton"));
+    City &c = g.cities.back();
+    const int pyr = kWonderBase + static_cast<int>(Wonder::Pyramids);
+    CHECK(!g.can_build(c, false, pyr));          // needs Masonry
+    g.civs[0].techs[static_cast<int>(Advance::Masonry)] = true;
+    CHECK(g.can_build(c, false, pyr));
+    g.set_production(c.id, false, pyr);
+    CHECK(!c.build_unit);
+    CHECK_EQ(c.build, pyr);
+    CHECK_EQ(g.production_cost(c), 300);
+    c.shields = 299;
+    g.civs[0].gold = 1000;
+    const int cid = c.id;
+    g.end_turn();
+    CHECK_EQ(g.wonder_owner(Wonder::Pyramids), 0);
+    CHECK(g.wonder_in(*g.city(cid), Wonder::Pyramids));
+    bool announced = false;
+    for (const Message &m : g.messages) announced |= m.kind == MsgKind::Wonder && m.wonder == static_cast<int>(Wonder::Pyramids);
+    CHECK(announced);
+    // Built once in the whole world.
+    CHECK(!g.can_build(*g.city(cid), false, pyr));
+    // Pyramids: one turn of Anarchy, any government.
+    g.revolution(0, Government::Democracy);
+    CHECK_EQ(g.civs[0].anarchy, 1);
+    g.end_turn();
+    CHECK(g.civs[0].govt == Government::Democracy);
+    // Obsolete once the owner learns Communism.
+    g.civs[0].techs[static_cast<int>(Advance::Communism)] = true;
+    CHECK(g.wonder_obsolete(Wonder::Pyramids));
+    CHECK(!g.wonder_active(0, Wonder::Pyramids));
+    g.revolution(0, Government::Monarchy);
+    CHECK_EQ(g.civs[0].anarchy, 0);   // no Monarchy advance, no Pyramids: refused
+
+    // Colossus: +1 trade on squares that already have trade.
+    Game h = flat_game();
+    place(h, 1, UnitType::Settlers, 40, 30);
+    const int s2 = place(h, 0, UnitType::Settlers, 1, 10);   // next to the ocean strip
+    h.found_city(s2, "Rhodes");
+    City &r = h.cities.back();
+    r.size = 3;
+    r.manual = true;
+    r.worked = {{-1, 0}, {-1, 1}, {0, 1}};   // two ocean squares, one grassland
+    h.update_city(r);
+    const int before = r.stats.raw.trade;
+    h.wonder_city[static_cast<int>(Wonder::Colossus)] = r.id;
+    h.update_city(r);
+    CHECK_EQ(r.stats.raw.trade, before + 3);  // centre + two oceans
+    // Copernicus doubles science in the city.
+    h.civs[0].sci = 10;
+    h.civs[0].tax = 0;
+    h.update_city(r);
+    const int sci = r.stats.sci;
+    h.wonder_city[static_cast<int>(Wonder::Copernicus)] = r.id;
+    h.update_city(r);
+    CHECK_EQ(r.stats.sci, sci * 2);
+    // Lighthouse and Magellan: ships move farther.
+    const int tri = place(h, 0, UnitType::Trireme, 0, 12);
+    const int base_moves = h.full_moves(*h.unit(tri));
+    h.wonder_city[static_cast<int>(Wonder::Lighthouse)] = r.id;
+    CHECK_EQ(h.full_moves(*h.unit(tri)), base_moves + 3);
+    // Manhattan Project opens Nuclear units to everyone with Rocketry.
+    h.civs[1].techs[static_cast<int>(Advance::Rocketry)] = true;
+    CHECK(!h.unit_available(1, UnitType::Nuclear));
+    h.wonder_city[static_cast<int>(Wonder::Manhattan)] = r.id;
+    CHECK(h.unit_available(1, UnitType::Nuclear));
+    // Shakespeare's Theatre: nobody unhappy.
+    r.size = 8;
+    r.manual = false;
+    h.civs[0].lux = 0;
+    h.civs[0].tax = 4;
+    h.civs[0].sci = 6;
+    h.update_city(r);
+    h.wonder_city[static_cast<int>(Wonder::Shakespeare)] = r.id;
+    h.update_city(r);
+    CHECK_EQ(r.stats.unhappy, 0);
+
+    // Great Library: an advance known to two others.
+    GameSettings gs;
+    gs.seed = 5;
+    gs.civs = 3;
+    Game k = Game::create(gs);
+    const int wr = static_cast<int>(Advance::Writing);
+    k.civs[1].techs[wr] = true;
+    k.civs[2].techs[wr] = true;
+    k.civs[0].techs[wr] = false;
+    City *cap = k.capital(0);
+    if (!cap) {
+        for (const Unit &u : k.units) {
+            if (u.owner == 0 && u.type == UnitType::Settlers) {
+                k.found_city(u.id, "Alexandria");
+                break;
+            }
+        }
+        cap = k.capital(0);
+    }
+    CHECK(cap != nullptr);
+    if (cap) {
+        const int capid = cap->id;
+        k.wonder_city[static_cast<int>(Wonder::GreatLibrary)] = capid;
+        k.end_turn();
+        CHECK(k.civs[0].techs[wr]);
+        // Saved and loaded with the game.
+        Game l;
+        CHECK(load_game(save_game(k), l));
+        CHECK_EQ(l.wonder_city[static_cast<int>(Wonder::GreatLibrary)], capid);
+    }
+    // Milestone 1 saves (version 1) still load.
+    std::string old = save_game(k);
+    old.replace(0, std::strlen("LUNDUKECIV 2"), "LUNDUKECIV 1");
+    Game m;
+    CHECK(load_game(old, m));
+}
+
 int main(int argc, char **argv)
 {
     const std::map<std::string, std::function<void()>> tests = {
         {"calendar", test_calendar},       {"terrain_yields", test_terrain_yields}, {"tech_prereqs", test_tech_prereqs},
         {"units_table", test_units_table}, {"combat_odds", test_combat_odds},       {"city_growth", test_city_growth},
         {"settlers_work", test_settlers_work}, {"movement", test_movement},          {"save_roundtrip", test_save_roundtrip},
-        {"ai_smoke", test_ai_smoke},
+        {"ai_smoke", test_ai_smoke},           {"wonders", test_wonders},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();

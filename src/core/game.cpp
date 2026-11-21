@@ -243,6 +243,138 @@ void Game::say(int civ, MsgKind kind, const std::string &text, int x, int y)
     }
 }
 
+// ---------------------------------------------------------------- wonders
+
+const City *Game::wonder_home(Wonder w) const
+{
+    const int id = wonder_city[static_cast<int>(w)];
+    return id >= 0 ? city(id) : nullptr;
+}
+
+int Game::wonder_owner(Wonder w) const
+{
+    const City *c = wonder_home(w);
+    return c ? c->owner : -1;
+}
+
+bool Game::wonder_obsolete(Wonder w) const
+{
+    const int o = wonder_owner(w);
+    const Advance a = wonder_info(w).obsolete;
+    return o >= 0 && a != Advance::None && has(o, a);
+}
+
+bool Game::wonder_active(int civ, Wonder w) const
+{
+    return civ >= 0 && wonder_owner(w) == civ && !wonder_obsolete(w);
+}
+
+bool Game::wonder_in(const City &c, Wonder w) const
+{
+    return wonder_city[static_cast<int>(w)] == c.id && !wonder_obsolete(w);
+}
+
+int Game::full_moves(const Unit &u) const
+{
+    int m = unit_info(u.type).moves;
+    if (unit_info(u.type).domain == Domain::Sea) {
+        if (wonder_active(u.owner, Wonder::Lighthouse)) ++m;
+        if (wonder_active(u.owner, Wonder::Magellan)) ++m;
+    }
+    return m * 3;
+}
+
+bool Game::hoover_here(const City &c) const
+{
+    if (!wonder_active(c.owner, Wonder::HooverDam)) return false;
+    const City *home = wonder_home(Wonder::HooverDam);
+    return home && map.at(home->x, home->y).continent == map.at(c.x, c.y).continent;
+}
+
+int Game::wonders_in(const City &c) const
+{
+    int n = 0;
+    for (int w = 0; w < kWonderCount; ++w) n += wonder_city[w] == c.id;
+    return n;
+}
+
+void Game::announce_wonder_start(const City &c)
+{
+    if (c.build_unit || !is_wonder_build(c.build)) return;
+    const int w = c.build - kWonderBase;
+    std::uint32_t &bits = wonder_started[static_cast<size_t>(c.owner)];
+    if ((bits >> w) & 1u) return;
+    bits |= 1u << w;
+    Message m;
+    m.civ = -1;
+    m.kind = MsgKind::Info;
+    m.text = "The " + civs[c.owner].name + " begin work on " + wonder_title(w) + " in " + c.name + ".";
+    m.x = c.x;
+    m.y = c.y;
+    m.turn = turn;
+    messages.push_back(m);
+}
+
+void Game::complete_wonder(City &c, Wonder w)
+{
+    const int wi = static_cast<int>(w);
+    wonder_city[wi] = c.id;
+    Message m;
+    m.civ = -1;
+    m.kind = MsgKind::Wonder;
+    m.wonder = wi;
+    m.text = "The " + civs[c.owner].name + " complete " + wonder_title(wi) + " in " + c.name + "!";
+    m.x = c.x;
+    m.y = c.y;
+    m.turn = turn;
+    messages.push_back(m);
+    Civ &civ = civs[c.owner];
+    switch (w) {
+    case Wonder::Darwin: {
+        // The advance under study, and one more.
+        for (int k = 0; k < 2; ++k) {
+            if (civ.research == Advance::None) {
+                if (civ.ai) choose_research_ai(c.owner);
+                else {
+                    const auto opts = researchable(c.owner);
+                    if (!opts.empty()) civ.research = opts.front();
+                }
+            }
+            if (civ.research == Advance::None) break;
+            const Advance a = civ.research;
+            learn(c.owner, a);
+            say(c.owner, MsgKind::Tech, std::string("Darwin's Voyage: your scientists discover ") + advance_info(a).name + "!");
+            if (civ.ai) choose_research_ai(c.owner);
+        }
+        break;
+    }
+    case Wonder::Apollo:
+        for (const City &o : cities) reveal(c.owner, o.x, o.y, 1);
+        break;
+    default: break;
+    }
+    // Everyone else building it must switch: to another wonder if one is open.
+    for (City &o : cities) {
+        if (o.id == c.id || o.build_unit || o.build != kWonderBase + wi) continue;
+        int alt = -1;
+        for (int k = 0; k < kWonderCount; ++k) {
+            if (can_build(o, false, kWonderBase + k)) {
+                alt = kWonderBase + k;
+                break;
+            }
+        }
+        if (alt >= 0) {
+            o.build = alt;
+            say(o.owner, MsgKind::Bad, o.name + " can no longer build " + wonder_title(wi) + "; work turns to " + wonder_title(alt - kWonderBase) + ".",
+                o.x, o.y);
+            announce_wonder_start(o);
+        } else {
+            say(o.owner, MsgKind::Bad, o.name + " can no longer build " + wonder_title(wi) + ".", o.x, o.y);
+            if (civs[o.owner].ai) ai_city(o);
+        }
+    }
+}
+
 std::string Game::city_display_name(int id) const
 {
     const City *c = city(id);
@@ -305,7 +437,7 @@ bool Game::unit_available(int civ, UnitType u) const
     const UnitInfo &i = unit_info(u);
     if (!has(civ, i.tech)) return false;
     if (i.obsolete != Advance::None && has(civ, i.obsolete)) return false;
-    if (i.flags & kNuclear) return false; // needs the Manhattan Project (wonders come later)
+    if ((i.flags & kNuclear) && !wonder_built(Wonder::Manhattan)) return false; // needs the Manhattan Project somewhere
     return true;
 }
 
@@ -317,6 +449,12 @@ bool Game::can_build(const City &c, bool is_unit, int what) const
         if (!unit_available(c.owner, static_cast<UnitType>(what))) return false;
         if (i.domain == Domain::Sea && !map.coastal(c.x, c.y)) return false;
         return true;
+    }
+    if (is_wonder_build(what)) {
+        const Wonder w = static_cast<Wonder>(what - kWonderBase);
+        const WonderInfo &wi = wonder_info(w);
+        if (wonder_built(w) || !has(c.owner, wi.tech)) return false;
+        return wi.obsolete == Advance::None || !has(c.owner, wi.obsolete);
     }
     if (what < 0 || what >= kBuildingCount) return false;
     const Building b = static_cast<Building>(what);
@@ -422,12 +560,14 @@ void Game::update_city(City &c)
     const Civ &civ = civs[c.owner];
     for (int pass = 0; pass < 12; ++pass) {
         CityStats s;
+        const bool colossus = wonder_in(c, Wonder::Colossus);
         Yield raw = tile_yield(c.x, c.y, c.owner, true);
+        if (colossus && raw.trade > 0) raw.trade++;
         for (const auto &w : c.worked) {
             const Yield y = tile_yield(c.x + w.first, c.y + w.second, c.owner, false);
             raw.food += y.food;
             raw.shields += y.shields;
-            raw.trade += y.trade;
+            raw.trade += y.trade + (colossus && y.trade > 0 ? 1 : 0);
         }
         s.raw = raw;
         // Unit support.
@@ -444,7 +584,7 @@ void Game::update_city(City &c)
         int shields = raw.shields;
         if (c.has(Building::Factory)) {
             int pct = 150;
-            if (c.has(Building::PowerPlant) || c.has(Building::HydroPlant) || c.has(Building::NuclearPlant)) pct += 50;
+            if (c.has(Building::PowerPlant) || c.has(Building::HydroPlant) || c.has(Building::NuclearPlant) || hoover_here(c)) pct += 50;
             if (c.has(Building::MfgPlant)) pct += 100;
             shields = shields * pct / 100;
         }
@@ -476,8 +616,12 @@ void Game::update_city(City &c)
             tax = tax * 3 / 2;
             lux = lux * 3 / 2;
         }
-        if (c.has(Building::Library)) sci = sci * 3 / 2;
-        if (c.has(Building::University)) sci = sci * 3 / 2;
+        // Libraries and Universities: +50% each, +83% with Isaac Newton's College.
+        const int lib_pct = wonder_active(c.owner, Wonder::Newton) ? 183 : 150;
+        if (c.has(Building::Library)) sci = sci * lib_pct / 100;
+        if (c.has(Building::University)) sci = sci * lib_pct / 100;
+        if (wonder_in(c, Wonder::Copernicus)) sci *= 2;
+        if (wonder_active(c.owner, Wonder::Seti)) sci = sci * 3 / 2;
         s.tax = tax;
         s.lux = lux;
         s.sci = sci;
@@ -504,9 +648,28 @@ void Game::update_city(City &c)
             unhappy -= k;
             content += k;
         };
-        if (c.has(Building::Temple)) calm(has(c.owner, Advance::Mysticism) ? 2 : 1);
+        if (c.has(Building::Temple)) {
+            const int t = has(c.owner, Advance::Mysticism) ? 2 : 1;
+            calm(wonder_active(c.owner, Wonder::Oracle) ? t * 2 : t);
+        }
         if (c.has(Building::Colosseum)) calm(3);
-        if (c.has(Building::Cathedral)) calm(4);
+        if (c.has(Building::Cathedral)) calm(wonder_active(c.owner, Wonder::Michelangelo) ? 6 : 4);
+        if (wonder_active(c.owner, Wonder::Bach)) {
+            const City *home = wonder_home(Wonder::Bach);
+            if (home && map.at(home->x, home->y).continent == map.at(c.x, c.y).continent) calm(2);
+        }
+        // Hanging Gardens and the Cure for Cancer: one more happy citizen.
+        auto cheer = [&]() {
+            if (content > 0) {
+                --content;
+                ++happy;
+            } else if (unhappy > 0) {
+                --unhappy;
+                ++content;
+            }
+        };
+        if (wonder_active(c.owner, Wonder::HangingGardens)) cheer();
+        if (wonder_active(c.owner, Wonder::CureForCancer)) cheer();
         if (civ.govt == Government::Despotism || civ.govt == Government::Monarchy || civ.govt == Government::Communism ||
             civ.govt == Government::Anarchy) {
             int troops = 0;
@@ -515,6 +678,30 @@ void Game::update_city(City &c)
             }
             calm(std::min(3, troops));
         }
+        if (civ.govt == Government::Republic || civ.govt == Government::Democracy) {
+            // Troops away from home make the people unhappy: one each in a
+            // Republic, two in a Democracy (less with Women's Suffrage).
+            int per = civ.govt == Government::Democracy ? 2 : 1;
+            if (wonder_active(c.owner, Wonder::Suffrage)) --per;
+            int away = 0;
+            for (const Unit &u : units) {
+                if (u.home != c.id || !military(u.type) || unit_info(u.type).attack == 0) continue;
+                const City *in = city_at(u.x, u.y);
+                if (in && in->owner == c.owner) continue;
+                if (map.at(u.x, u.y).fortress && map.distance(u.x, u.y, c.x, c.y) <= 3) continue;
+                ++away;
+            }
+            for (int k = 0; k < away * per; ++k) {
+                if (content > 0) {
+                    --content;
+                    ++unhappy;
+                } else if (happy > 0) {
+                    --happy;
+                    ++content;
+                }
+            }
+        }
+        if (wonder_in(c, Wonder::Shakespeare)) calm(unhappy);
         s.happy = happy;
         s.content = content;
         s.unhappy = unhappy;
@@ -1214,10 +1401,11 @@ void Game::set_rates(int civ, int tax, int lux, int sci)
 void Game::revolution(int civ, Government g)
 {
     Civ &c = civs[civ];
-    if (!has(civ, government_info(g).tech)) return;
+    const bool pyramids = wonder_active(civ, Wonder::Pyramids);
+    if (!pyramids && !has(civ, government_info(g).tech)) return;
     c.target = g;
     c.govt = Government::Anarchy;
-    c.anarchy = 2;
+    c.anarchy = pyramids ? 1 : 2;
     say(civ, MsgKind::Bad, "Revolution! The " + c.name + " fall into Anarchy.");
     for (City &ct : cities) {
         if (ct.owner == civ) update_city(ct);
@@ -1244,6 +1432,7 @@ void Game::set_production(int city_id, bool is_unit, int what)
     if (c->build_unit != is_unit) c->shields /= 2;
     c->build_unit = is_unit;
     c->build = what;
+    announce_wonder_start(*c);
 }
 
 void Game::toggle_tile(int city_id, int dx, int dy)
@@ -1464,6 +1653,13 @@ void Game::process_city(City &c, bool &learned_any)
                 c.shields -= cost;
                 say(c.owner, MsgKind::City, c.name + " builds " + unit_info(t).name + ".", c.x, c.y);
             }
+        } else if (is_wonder_build(c.build)) {
+            c.shields -= cost;
+            complete_wonder(c, static_cast<Wonder>(c.build - kWonderBase));
+            if (!civ.ai) {
+                c.build_unit = true;
+                c.build = static_cast<int>(unit_available(c.owner, UnitType::Phalanx) ? UnitType::Phalanx : UnitType::Militia);
+            }
         } else {
             const Building b = static_cast<Building>(c.build);
             if (b == Building::Palace) {
@@ -1546,6 +1742,21 @@ void Game::start_turn_for(int ci)
         civ.gold += sell_cost;
         say(ci, MsgKind::Bad, std::string("Short of gold: the ") + building_info(sell_b).name + " in " + sell_city->name + " is sold.",
             sell_city->x, sell_city->y);
+    }
+    // The Great Library: an advance two other civilizations know.
+    if (wonder_active(ci, Wonder::GreatLibrary)) {
+        for (int a = 0; a < kAdvanceCount; ++a) {
+            if (civ.techs[a] || a == static_cast<int>(Advance::FutureTech)) continue;
+            int knowers = 0;
+            for (int k = 0; k < static_cast<int>(civs.size()); ++k) {
+                if (k != ci && civs[k].alive && civs[k].techs[a]) ++knowers;
+            }
+            if (knowers >= 2) {
+                learn(ci, static_cast<Advance>(a));
+                say(ci, MsgKind::Tech, std::string("The Great Library gives you ") + advance_info(a).name + ".");
+                break;
+            }
+        }
     }
     // Research.
     if (civ.research == Advance::None && civ.ai) choose_research_ai(ci);

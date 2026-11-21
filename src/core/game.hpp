@@ -107,12 +107,13 @@ struct Civ {
     std::uint8_t contact = 0;   // bit per civ
 };
 
-enum class MsgKind : std::uint8_t { Info, Good, Bad, Combat, Tech, City };
+enum class MsgKind : std::uint8_t { Info, Good, Bad, Combat, Tech, City, Wonder };
 
 struct Message {
     int civ = -1;          // -1 everyone
     MsgKind kind = MsgKind::Info;
     std::string text;
+    int wonder = -1;       // MsgKind::Wonder: which one
     int x = -1;
     int y = -1;
     int turn = 0;
@@ -190,6 +191,12 @@ public:
     bool human_dead = false;
     bool all_ai = false;
     std::uint64_t seed = 1;
+    // Wonders of the World: the city id holding each, -1 not built yet,
+    // -2 lost with its city.
+    std::array<int, kWonderCount> wonder_city{};
+    std::array<std::uint32_t, kMaxCivs> wonder_started{};  // announced "is building" bits
+
+    Game() { wonder_city.fill(-1); }
 
     // --- setup
     static Game create(const GameSettings &s);
@@ -216,6 +223,15 @@ public:
     bool can_build(const City &c, bool unit, int what) const;
     bool unit_available(int civ, UnitType u) const;
 
+    // --- wonders
+    int wonder_owner(Wonder w) const;                  // civ holding it, -1 none
+    bool wonder_built(Wonder w) const { return wonder_city[static_cast<int>(w)] != -1; }
+    bool wonder_obsolete(Wonder w) const;              // its owner knows the advance that ends it
+    bool wonder_active(int civ, Wonder w) const;       // civ holds it and it still works
+    bool wonder_in(const City &c, Wonder w) const;     // in this city and still working
+    const City *wonder_home(Wonder w) const;
+    int wonders_in(const City &c) const;               // count, for the city screen
+
     // --- rules
     Yield tile_yield(int x, int y, int civ, bool centre) const;
     bool tile_free_for(const City &c, int x, int y) const;
@@ -233,7 +249,8 @@ public:
     int move_cost(const Unit &u, int fx, int fy, int tx, int ty) const;
     bool can_enter(const Unit &u, int tx, int ty) const;   // terrain/domain only
     bool zoc_blocks(const Unit &u, int tx, int ty) const;
-    int full_moves(const Unit &u) const { return unit_info(u.type).moves * 3; }
+    int full_moves(const Unit &u) const;
+    bool hoover_here(const City &c) const;   // Hoover Dam powers this city
     int cargo_count(int ship_id) const;
 
     // --- actions
@@ -287,6 +304,8 @@ private:
     void capture_city(City &c, int new_owner);
     std::string next_city_name(int civ);
     void choose_research_ai(int civ);
+    void complete_wonder(City &c, Wonder w);
+    void announce_wonder_start(const City &c);
     void ai_city(City &c);
     void ai_unit(Unit &u);
     void ai_diplomacy(int civ);

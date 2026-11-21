@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Bryan Lunduke
 civart = static_library(
   'civart',
-  files('art/sprites.cpp', 'art/terrain_paint.cpp'),
+  files('art/sprites.cpp', 'art/terrain_paint.cpp', 'art/wonders.cpp'),
   include_directories: [civcore_inc, include_directories('art')],
   dependencies: [cairo_dep],
 )

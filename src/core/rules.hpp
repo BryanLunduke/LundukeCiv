@@ -121,7 +121,34 @@ struct BuildingInfo {
     const char *effect;
 };
 const BuildingInfo &building_info(Building b);
-inline const BuildingInfo &building_info(int b) { return building_info(static_cast<Building>(b)); }
+
+// The 21 Wonders of the World. Each is built once in the whole world; a
+// city builds one as an improvement whose index is kWonderBase + wonder.
+enum class Wonder : std::uint8_t {
+    Colossus, Pyramids, GreatWall, HangingGardens, Lighthouse, GreatLibrary, Oracle,
+    Copernicus, Michelangelo, Shakespeare, Bach, Magellan, Newton, Darwin,
+    Suffrage, HooverDam, Manhattan, UnitedNations, Apollo, Seti, CureForCancer,
+    Count,
+};
+constexpr int kWonderCount = static_cast<int>(Wonder::Count);
+constexpr int kWonderBase = 64;
+inline bool is_wonder_build(int what) { return what >= kWonderBase && what < kWonderBase + kWonderCount; }
+
+struct WonderInfo {
+    const char *name;
+    int cost;
+    Advance tech;
+    Advance obsolete;   // None: never
+    const char *effect;
+};
+const WonderInfo &wonder_info(Wonder w);
+inline const WonderInfo &wonder_info(int w) { return wonder_info(static_cast<Wonder>(w)); }
+// "the Pyramids", "Copernicus' Observatory": the name as used in a sentence.
+std::string wonder_title(int w);
+
+// Buildings by index; wonder indices (kWonderBase + w) give the wonder's
+// name, cost and effect with no upkeep.
+const BuildingInfo &building_info(int b);
 
 enum class Government : std::uint8_t { Anarchy, Despotism, Monarchy, Communism, Republic, Democracy, Count };
 struct GovernmentInfo {

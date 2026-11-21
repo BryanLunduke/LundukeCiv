@@ -258,12 +258,14 @@ void App::end_turn()
 void App::collect_news(bool report)
 {
     std::vector<std::string> lines, popup;
+    std::vector<std::pair<int, std::string>> wonders;
     std::string popup_title;
     for (size_t i = seen_messages_; i < g().messages.size(); ++i) {
         const Message &m = g().messages[i];
         if (m.civ != human() && m.civ != -1) continue;
         news_ = m.text;
         lines.push_back(m.text);
+        if (m.kind == MsgKind::Wonder && m.wonder >= 0) wonders.push_back({m.wonder, m.text});
         if (m.kind == MsgKind::Tech || m.kind == MsgKind::Good || m.kind == MsgKind::Bad) {
             popup.push_back(m.text);
             if (popup_title.empty()) popup_title = m.kind == MsgKind::Tech ? "Science" : (m.kind == MsgKind::Bad ? "Bad News" : "Good News");
@@ -279,6 +281,14 @@ void App::collect_news(bool report)
         open(d);
     } else if (!report && !popup.empty()) {
         message(popup_title, popup);
+    }
+    for (const auto &w : wonders) {
+        Dialog d;
+        d.kind = DialogKind::WonderBuilt;
+        d.title = "Wonder of the World";
+        d.other = w.first;
+        d.lines = {w.second};
+        open(d);
     }
 }
 
@@ -787,6 +797,13 @@ bool App::key(const KeyEvent &k)
         open(d);
         return true;
     }
+    case 'o': {
+        Dialog d;
+        d.kind = DialogKind::Wonders;
+        d.title = "Wonders of the World";
+        open(d);
+        return true;
+    }
     case 'v': {
         Dialog d;
         d.kind = DialogKind::Cities;
@@ -915,6 +932,7 @@ std::vector<App::MenuItem> App::menu_items(int menu)
         items.push_back({"Cities", "V", dialog(DialogKind::Cities, "Cities"), have});
         items.push_back({"Science", "A", dialog(DialogKind::Science, "Science Advisor"), have});
         items.push_back({"Foreign Affairs", "", dialog(DialogKind::Foreign, "Foreign Affairs"), have});
+        items.push_back({"Wonders of the World", "O", dialog(DialogKind::Wonders, "Wonders of the World"), have});
         break;
     case 3:
         items.push_back({"Zoom In", "+", [this] { zoom_ = std::min(3, zoom_ + 1); if (const Unit *a = g().unit(active_)) center_on(a->x, a->y); }, have});

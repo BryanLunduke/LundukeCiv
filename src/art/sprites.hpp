@@ -54,6 +54,9 @@ Pixmap city_tile(int size, bool walls, bool capital, const CivColors &civ, int s
 void tiny_text(Pixmap &pm, int x, int y, const std::string &text, Argb ink);
 int tiny_width(const std::string &text);
 
+// A Wonder of the World as a framed 32x32 plaque (wonders.cpp).
+Pixmap wonder_icon(int wonder);
+
 // Food, shield and trade glyphs (7x7) for yield readouts.
 Pixmap yield_icon(int kind);
 

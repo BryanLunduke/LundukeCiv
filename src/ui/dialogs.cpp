@@ -82,6 +82,8 @@ void App::draw_dialog(cairo_t *cr, Dialog &d)
     case DialogKind::ConfirmWar: draw_confirm_war(cr, d); break;
     case DialogKind::GameOver: draw_game_over(cr, d); break;
     case DialogKind::Help: draw_help(cr, d); break;
+    case DialogKind::WonderBuilt: draw_wonder_built(cr, d); break;
+    case DialogKind::Wonders: draw_wonders(cr, d); break;
     default: break;
     }
 }
@@ -477,21 +479,26 @@ void App::draw_city(cairo_t *cr, Dialog &d)
     ry += 20;
     {
         double eh = 22;
-        if (!c.build_unit) eh = measure(cr, kUiFont, building_info(c.build).effect, static_cast<int>(rw - 24)).h;
+        if (!c.build_unit) eh = measure(cr, kUiFont, building_info(c.build).effect, static_cast<int>(rw - (is_wonder_build(c.build) ? 94 : 24))).h;
         const double boxh = std::max(100.0, 34 + eh + 46);
         round_rect(cr, rx, ry, rw, boxh, 8);
         set(cr, kSlateDeep);
         cairo_fill(cr);
         const int cost = g().production_cost(c);
         std::string name;
+        const bool wonder = !c.build_unit && is_wonder_build(c.build);
         if (c.build_unit) {
             paint_pixmap(cr, art::unit_card(static_cast<UnitType>(c.build), civ_colors(g().civs[c.owner].color)), rx + 8, ry + 8, 2);
             name = unit_info(c.build).name;
+        } else if (wonder) {
+            paint_pixmap(cr, art::wonder_icon(c.build - kWonderBase), rx + 8, ry + 8, 2);
+            name = building_info(c.build).name;
+            text(cr, kUiFont, building_info(c.build).effect, rx + 82, ry + 34, kSlateDim, 1.0, static_cast<int>(rw - 94));
         } else {
             name = building_info(c.build).name;
             text(cr, kUiFont, building_info(c.build).effect, rx + 12, ry + 34, kSlateDim, 1.0, static_cast<int>(rw - 24));
         }
-        const double nx = c.build_unit ? rx + 82 : rx + 12;
+        const double nx = (c.build_unit || wonder) ? rx + 82 : rx + 12;
         text(cr, kBoldFont, name, nx, ry + 10, kSlateGold);
         if (c.build_unit) {
             const UnitInfo &ui = unit_info(c.build);
@@ -531,6 +538,16 @@ void App::draw_city(cairo_t *cr, Dialog &d)
             text(cr, kUiFont, building_info(b).name, rx + 4, ry, kSlateInk);
             if (building_info(b).upkeep) text_right(cr, kTagFont, std::to_string(building_info(b).upkeep) + "g", rr, ry + 3, kSlateDim);
             ry += 20;
+            ++n;
+        }
+        for (int wv = 0; wv < kWonderCount; ++wv) {
+            if (g().wonder_city[wv] != c.id) continue;
+            if (ry > y + h - 92) break;
+            paint_pixmap(cr, art::wonder_icon(wv), rx + 2, ry, 1);
+            const bool obs = g().wonder_obsolete(static_cast<Wonder>(wv));
+            text(cr, kBoldFont, wonder_info(wv).name, rx + 42, ry + 6, obs ? kSlateDim : kSlateGold);
+            text_right(cr, kTagFont, obs ? "obsolete" : "wonder", rr, ry + 9, kSlateDim);
+            ry += 36;
             ++n;
         }
         if (!n) text(cr, kUiFont, "None yet.", rx + 4, ry, kSlateDim);
@@ -603,6 +620,33 @@ void App::draw_production(cairo_t *cr, Dialog &d)
             close_top();
         });
         by += brow;
+    }
+    bool wonder_header = false;
+    for (int wv = 0; wv < kWonderCount; ++wv) {
+        const int b = kWonderBase + wv;
+        if (!g().can_build(c, false, b)) continue;
+        if (!wonder_header) {
+            by += 6;
+            section(cr, "WONDERS OF THE WORLD", M, by, M + colw);
+            by += 20;
+            wonder_header = true;
+        }
+        if (by + 36 > y + h - 70) break;
+        const bool cur = !c.build_unit && c.build == b;
+        const bool hv = hover(M, by, colw, 34);
+        round_rect(cr, M, by, colw, 34, 5);
+        set(cr, cur ? hex(0x3E4A5E) : (hv ? hex(0x354154) : hex(0x29323F)));
+        cairo_fill(cr);
+        paint_pixmap(cr, art::wonder_icon(wv), M + 1, by + 1, 1);
+        const BuildingInfo &bi = building_info(b);
+        text(cr, kBoldFont, bi.name, M + 42, by + 7, cur ? kSlateGold : kSlateInk);
+        text_right(cr, kUiFont, std::to_string(bi.cost) + " · " + eta(bi.cost), M + colw - 10, by + 8, kSlateDim);
+        const int cid = c.id;
+        hot(M, by, colw, 34, [this, cid, b] {
+            g().set_production(cid, false, b);
+            close_top();
+        });
+        by += 38;
     }
     text(cr, kUiFont, "Switching between a unit and an improvement loses half the shields.", L, y + h - 46, kSlateDim);
     const double bx = x + w - 20 - 140, byy = y + h - 54;
@@ -910,7 +954,8 @@ void App::draw_foreign(cairo_t *cr, Dialog &d)
                         if (u.owner == me) mine += unit_info(u.type).attack;
                         if (u.owner == k) theirs += unit_info(u.type).attack;
                     }
-                    if (mine > theirs || g().rng.chance(0.3)) {
+                    const bool wall = g().wonder_active(me, Wonder::GreatWall) || g().wonder_active(me, Wonder::UnitedNations);
+                    if (wall || mine > theirs || g().rng.chance(0.3)) {
                         g().make_peace(me, k);
                         message("Peace", {"The " + g().civs[k].name + " accept peace."});
                     } else {
@@ -1025,6 +1070,113 @@ void App::draw_help(cairo_t *cr, Dialog &d)
         text(cr, kUiFont, r.second, x + 200, cy, kSlateInk);
         cy += 28;
     }
+    const double bx = x + w - 24 - 140, by = y + h - 54;
+    wide_button(cr, bx, by, 140, 38, "Close", "Esc", true, hover(bx, by, 140, 38));
+    hot(bx, by, 140, 38, [this] { close_top(); });
+}
+
+// A Wonder of the World completed somewhere: the plaque, large, with the news.
+void App::draw_wonder_built(cairo_t *cr, Dialog &d)
+{
+    const int wv = std::clamp(d.other, 0, kWonderCount - 1);
+    const WonderInfo &wi = wonder_info(wv);
+    const double w = 640, h = 380, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, d.title);
+    const double L = x + 24, R = x + w - 24;
+    // The plaque at 6x on a deep well with a gold rule.
+    round_rect(cr, L, cy, 208, 208, 8);
+    set(cr, kSlateDeep);
+    cairo_fill(cr);
+    paint_pixmap(cr, art::wonder_icon(wv), L + 8, cy + 8, 6);
+    const double tx = L + 228, tw = R - tx;
+    text(cr, kBoldFont, wi.name, tx, cy + 4, kSlateGold, 1.0, static_cast<int>(tw));
+    double ty = cy + 4 + measure(cr, kBoldFont, wi.name, static_cast<int>(tw)).h + 10;
+    const std::string news = d.lines.empty() ? std::string() : d.lines.front();
+    text(cr, kUiFont, news, tx, ty, kSlateInk, 1.0, static_cast<int>(tw));
+    ty += measure(cr, kUiFont, news, static_cast<int>(tw)).h + 14;
+    fill(cr, tx, ty, tw, 1, kSlateEdge);
+    ty += 10;
+    text(cr, kTagFont, "EFFECT", tx, ty, kSlateDim);
+    ty += 16;
+    text(cr, kUiFont, wi.effect, tx, ty, kSlateInk, 1.0, static_cast<int>(tw));
+    ty += measure(cr, kUiFont, wi.effect, static_cast<int>(tw)).h + 10;
+    const std::string ends = wi.obsolete == Advance::None ? std::string("Never obsolete.")
+                                                          : std::string("Obsolete once its owner learns ") + advance_info(wi.obsolete).name + ".";
+    text(cr, kTagFont, ends, tx, ty, kSlateDim, 1.0, static_cast<int>(tw));
+    const double bx = R - 140, by = y + h - 56;
+    wide_button(cr, bx, by, 140, 38, "OK", "Enter", true, hover(bx, by, 140, 38));
+    hot(bx, by, 140, 38, [this] { close_top(); });
+}
+
+// The Wonders advisor: all 21, who holds each, what is under way.
+void App::draw_wonders(cairo_t *cr, Dialog &d)
+{
+    const int me = human();
+    const double w = std::min(1180, geo_.win_w - 16), h = std::min(784, geo_.win_h - 16);
+    const double x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, d.title);
+    const double L = x + 16;
+    const int cols = 3;
+    const int rows = (kWonderCount + cols - 1) / cols;
+    const double cw = (w - 32 - (cols - 1) * 8) / cols;
+    const double rh = std::min(86.0, (h - 54 - 70 - (rows - 1) * 6) / rows);
+    int mine = 0, built = 0;
+    for (int wv = 0; wv < kWonderCount; ++wv) {
+        const Wonder ww = static_cast<Wonder>(wv);
+        const double cx = L + (wv % cols) * (cw + 8), ry = cy + (wv / cols) * (rh + 6);
+        const WonderInfo &wi = wonder_info(wv);
+        const City *home = g().wonder_home(ww);
+        const bool lost = g().wonder_built(ww) && !home;
+        const bool obs = g().wonder_obsolete(ww);
+        built += g().wonder_built(ww);
+        const bool ours = home && home->owner == me;
+        mine += ours;
+        round_rect(cr, cx, ry, cw, rh, 6);
+        set(cr, ours ? hex(0x323C4C) : hex(0x29323F));
+        cairo_fill(cr);
+        const int scale = rh >= 76 ? 2 : 1;
+        const double icon = 32.0 * scale;
+        paint_pixmap(cr, art::wonder_icon(wv), cx + 6, ry + (rh - icon) / 2, scale);
+        if (!g().wonder_built(ww) && !g().has(me, wi.tech)) {
+            // Not yet within reach: dim the plaque.
+            cairo_rectangle(cr, cx + 6, ry + (rh - icon) / 2, icon, icon);
+            cairo_set_source_rgba(cr, 0.08, 0.1, 0.14, 0.55);
+            cairo_fill(cr);
+        }
+        const double tx = cx + 14 + icon, tw = cw - (tx - cx) - 8;
+        text(cr, kBoldFont, wi.name, tx, ry + 6, ours ? kSlateGold : kSlateInk, 1.0, static_cast<int>(tw));
+        std::string status;
+        Ink col = kSlateDim;
+        if (lost) {
+            status = "Destroyed with its city";
+            col = kSlateBad;
+        } else if (home) {
+            const bool met = home->owner == me || ((g().civs[me].contact >> home->owner) & 1u);
+            status = (met ? "The " + g().civs[home->owner].name : std::string("Unknown people")) + " \u00b7 " + (met ? home->name : "?");
+            if (obs) status += " \u00b7 obsolete";
+            col = ours ? kSlateGood : kSlateInk;
+        } else {
+            const City *ours_building = nullptr;
+            for (const City &c : g().cities) {
+                if (c.owner == me && !c.build_unit && c.build == kWonderBase + wv) ours_building = &c;
+            }
+            if (ours_building) {
+                status = "Building in " + ours_building->name + " (" + std::to_string(ours_building->shields) + "/" +
+                         std::to_string(g().production_cost(*ours_building)) + ")";
+                col = kSlateGold;
+            } else if (g().has(me, wi.tech)) {
+                status = "Available \u00b7 " + std::to_string(wi.cost) + " shields";
+                col = kSlateGood;
+            } else {
+                status = std::string("Needs ") + advance_info(wi.tech).name;
+            }
+        }
+        text(cr, kTagFont, status, tx, ry + 28, col, 1.0, static_cast<int>(tw));
+        if (rh >= 60) text(cr, kTagFont, wi.effect, tx, ry + 44, kSlateDim, 1.0, static_cast<int>(tw));
+    }
+    text(cr, kUiFont,
+         std::to_string(built) + " of " + std::to_string(kWonderCount) + " wonders built \u00b7 " + std::to_string(mine) + (mine == 1 ? " is yours." : " are yours."),
+         x + 24, y + h - 46, kSlateDim);
     const double bx = x + w - 24 - 140, by = y + h - 54;
     wide_button(cr, bx, by, 140, 38, "Close", "Esc", true, hover(bx, by, 140, 38));
     hot(bx, by, 140, 38, [this] { close_top(); });

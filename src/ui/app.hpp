@@ -48,7 +48,7 @@ struct KeyEvent {
 
 enum class DialogKind {
     None, NewGame, Message, Combat, City, Production, Science, Rates, Revolution, SaveLoad, CityName, Cities,
-    Foreign, UnitSheet, ConfirmWar, GameOver, Report, Help,
+    Foreign, UnitSheet, ConfirmWar, GameOver, Report, Help, WonderBuilt, Wonders,
 };
 
 struct Dialog {
@@ -180,6 +180,8 @@ private:
     void draw_confirm_war(cairo_t *cr, Dialog &d);
     void draw_game_over(cairo_t *cr, Dialog &d);
     void draw_help(cairo_t *cr, Dialog &d);
+    void draw_wonder_built(cairo_t *cr, Dialog &d);
+    void draw_wonders(cairo_t *cr, Dialog &d);
     void draw_title(cairo_t *cr);
 
     struct MenuItem {
