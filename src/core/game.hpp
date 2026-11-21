@@ -253,6 +253,7 @@ public:
     void say(int civ, MsgKind kind, const std::string &text, int x = -1, int y = -1);
     std::string city_display_name(int id) const;
     std::string unit_name(const Unit &u) const;
+    std::string suggest_city_name(int civ) const;   // the name found_city would pick
 
     // Pathfinding for land/sea units; returns false if no route.
     bool next_step(const Unit &u, int tx, int ty, int &sdx, int &sdy, int limit = 6000) const;

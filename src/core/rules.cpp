@@ -155,11 +155,11 @@ const BuildingInfo kBuildings[kBuildingCount] = {
 };
 
 const GovernmentInfo kGovernments[static_cast<int>(Government::Count)] = {
-    {"Anarchy", A::None, 0, 40, 1, -1},
-    {"Despotism", A::None, 6, 40, 1, -1},
-    {"Monarchy", A::Monarchy, 7, 25, 1, 3},
+    {"Anarchy", A::None, 0, 30, 1, -1},
+    {"Despotism", A::None, 6, 20, 1, -1},
+    {"Monarchy", A::Monarchy, 7, 15, 1, 3},
     {"Communism", A::Communism, 8, 0, 1, 3},
-    {"Republic", A::Republic, 8, 15, 2, 0},
+    {"Republic", A::Republic, 8, 10, 2, 0},
     {"Democracy", A::Democracy, 9, 0, 2, 0},
 };
 } // namespace

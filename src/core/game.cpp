@@ -88,7 +88,7 @@ Game Game::create(const GameSettings &s)
             c.leader = kPresets[p].leader;
             c.color = kPresets[p].color == s.player_color ? 0 : kPresets[p].color;
             c.ai = true;
-            c.name_next = p * 100; // remembers the preset
+            c.name_next = (p + 1) * 100; // remembers the preset
         }
         c.gold = 50;
     }
@@ -131,6 +131,7 @@ Game Game::create(const GameSettings &s)
             }
         }
         starts.push_back({bx, by});
+        g.reveal(i, bx, by, 2);
         g.add_unit(i, UnitType::Settlers, bx, by, -1);
         g.add_unit(i, UnitType::Militia, bx, by, -1);
         if (i == 0 && (s.difficulty == Difficulty::Chieftain || s.difficulty == Difficulty::Warlord)) {
@@ -453,14 +454,14 @@ void Game::update_city(City &c)
         for (const City &o : cities) {
             if (o.owner == c.owner && o.has(Building::Palace)) dist = map.distance(c.x, c.y, o.x, o.y);
         }
-        int corr_pct = civ.govt == Government::Communism ? 20 : std::min(90, gi.corruption_pct * dist / 10);
+        int corr_pct = civ.govt == Government::Communism ? 20 : std::min(60, gi.corruption_pct * dist / 10);
         if (civ.govt == Government::Democracy) corr_pct = 0;
         if (c.has(Building::Courthouse)) corr_pct /= 2;
         if (c.has(Building::Palace)) corr_pct = 0;
         s.corruption = raw.trade * corr_pct / 100;
         const int trade = raw.trade - s.corruption;
-        int sci = trade * civ.sci / 10;
-        int lux = trade * civ.lux / 10;
+        int sci = (trade * civ.sci + 5) / 10;
+        int lux = std::min(trade - sci, (trade * civ.lux + 5) / 10);
         int tax = trade - sci - lux;
         if (civ.govt == Government::Anarchy) {
             lux += sci + tax;
@@ -1064,13 +1065,22 @@ std::string Game::next_city_name(int civ)
         if (n >= 24) name += " " + std::to_string(n / 24 + 1);
         c.name_next++;
     } else {
-        const int preset = c.name_next / 100;
+        const int preset = c.name_next / 100 - 1;
         const int n = c.name_next % 100;
         name = kPresets[preset].cities[n % 16];
         if (n >= 16) name = "New " + name;
         c.name_next++;
     }
     return name;
+}
+
+std::string Game::suggest_city_name(int civ) const
+{
+    Game &self = const_cast<Game &>(*this);
+    const int keep = civs[civ].name_next;
+    std::string n = self.next_city_name(civ);
+    self.civs[civ].name_next = keep;
+    return n;
 }
 
 bool Game::found_city(int unit_id, const std::string &name)

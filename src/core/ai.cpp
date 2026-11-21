@@ -537,6 +537,21 @@ void Game::ai_play(int ci)
         for (const Unit &u : units) guarded |= u.owner == ci && u.x == ct.x && u.y == ct.y && is_military(u.type);
         if (!guarded && ct.build_unit && unit_info(ct.build).defense > 0 && buy_cost(ct) <= c.gold / 2) buy(ct.id);
     }
+    // Spend a fat treasury: rush the cheapest job that is half done.
+    for (int guard = 0; guard < 4 && c.gold > 120; ++guard) {
+        City *best = nullptr;
+        int best_cost = 1 << 30;
+        for (City &ct : cities) {
+            if (ct.owner != ci || ct.bought) continue;
+            const int cost = buy_cost(ct);
+            if (cost > 0 && cost < best_cost && ct.shields * 2 >= production_cost(ct)) {
+                best_cost = cost;
+                best = &ct;
+            }
+        }
+        if (!best || best_cost > c.gold - 80) break;
+        buy(best->id);
+    }
     std::vector<int> ids;
     for (const Unit &u : units) {
         if (u.owner == ci) ids.push_back(u.id);
