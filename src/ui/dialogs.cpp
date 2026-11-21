@@ -1111,12 +1111,16 @@ void App::draw_game_over(cairo_t *cr, Dialog &d)
 
 void App::draw_help(cairo_t *cr, Dialog &d)
 {
-    const double w = 640, h = 560, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    const double w = std::min(1140, geo_.win_w - 16), h = 600, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
     double cy = dialog_frame(cr, x, y, w, h, d.title);
+    const double L = x + 24, mid = x + w * 0.54;
+    section(cr, "KEYBOARD AND MOUSE", L, cy, mid - 24);
+    section(cr, "CONTROLLER", mid, cy, x + w - 24);
+    cy += 22;
     const std::pair<const char *, const char *> rows[] = {
-        {"Arrows, keypad", "Move the active unit (keypad 7 9 1 3 for diagonals)"},
+        {"Arrows, keypad", "Move the active unit (7 9 1 3 diagonals)"},
         {"B", "Found a city (or join one)"},
-        {"R  I  M  P", "Settlers: road/railroad, irrigate, mine, fortress/clean up"},
+        {"R  I  M  P", "Road/railroad, irrigate, mine, fortress/clean"},
         {"F  S", "Fortify, sentry"},
         {"G", "Go to a square (then click it)"},
         {"W  Space  N", "Wait, skip this turn, next unit"},
@@ -1125,14 +1129,35 @@ void App::draw_help(cairo_t *cr, Dialog &d)
         {"C  H", "Center on the unit, on the capital"},
         {"+  -  wheel", "Zoom"},
         {"T  A  V", "Tax rates, science, cities"},
+        {"O  Y", "Wonders, spaceship"},
         {"Ctrl+S  Ctrl+L", "Save, load"},
         {"Click", "Select a unit, open a city, move next door"},
         {"Right click", "Center the map there"},
     };
+    double ly = cy;
     for (const auto &r : rows) {
-        text(cr, kBoldFont, r.first, x + 24, cy, kSlateGold);
-        text(cr, kUiFont, r.second, x + 200, cy, kSlateInk);
-        cy += 28;
+        text(cr, kBoldFont, r.first, L, ly, kSlateGold);
+        text(cr, kUiFont, r.second, L + 150, ly, kSlateInk, 1.0, static_cast<int>(mid - 24 - L - 150));
+        ly += 28;
+    }
+    const std::pair<std::string, std::string> pads[] = {
+        {"D-pad, left stick", "Move the cursor; in menus and dialogs, the focus"},
+        {glyphs_.a, "Next door: move or attack. On the unit: its orders. A city: open it. Further: go there"},
+        {glyphs_.b, "Back, close; on the map, back to the unit, then wait"},
+        {glyphs_.x, "Orders menu"},
+        {glyphs_.y, "Settlers found a city; troops fortify"},
+        {glyphs_.lb + "  " + glyphs_.rb, "Previous, next unit"},
+        {glyphs_.view, "End the turn"},
+        {glyphs_.menu, "Menus (OK in dialogs)"},
+        {"Triggers", "Zoom out, in"},
+        {"Right stick", "Scroll the map"},
+        {"Stick clicks", "Center on the unit, on the cursor"},
+    };
+    double py = cy;
+    for (const auto &r : pads) {
+        text(cr, kBoldFont, r.first, mid, py, kSlateGold);
+        text(cr, kUiFont, r.second, mid + 150, py, kSlateInk, 1.0, static_cast<int>(x + w - 24 - mid - 150));
+        py += std::max(28.0, measure(cr, kUiFont, r.second, static_cast<int>(x + w - 24 - mid - 150)).h + 8.0);
     }
     const double bx = x + w - 24 - 140, by = y + h - 54;
     wide_button(cr, bx, by, 140, 38, "Close", "Esc", true, hover(bx, by, 140, 38));

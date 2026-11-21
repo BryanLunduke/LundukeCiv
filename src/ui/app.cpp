@@ -945,6 +945,20 @@ bool App::wheel(double x, double y, double dy)
 
 bool App::tick(unsigned long long ms)
 {
+    bool pad_moved = false;
+    for (int k = pad::repeat_steps(repeat_, static_cast<long long>(ms)); k > 0; --k) {
+        pad_direction(repeat_.dx, repeat_.dy);
+        pad_moved = true;
+    }
+    if ((pan_x_ || pan_y_) && game_ && dialogs_.empty() && ms - last_pan_ >= 90) {
+        last_pan_ = ms;
+        // Right stick: scroll the map a square at a time.
+        view_x_ = g().map.wrap_x(view_x_ + (pan_x_ > 0 ? 1 : (pan_x_ < 0 ? -1 : 0)));
+        const int rows = geo_.map_h / tile_px();
+        view_y_ = std::clamp(view_y_ + (pan_y_ > 0 ? 1 : (pan_y_ < 0 ? -1 : 0)), 0, std::max(0, g().map.h - rows));
+        pad_moved = true;
+    }
+    if (pad_moved) return true;
     if (ms - last_blink_ >= 450) {
         last_blink_ = ms;
         blink_ = !blink_;
@@ -1050,6 +1064,7 @@ void App::render(cairo_t *cr, int w, int h)
     } else if (menu_open_ >= 0) {
         draw_menu_dropdown(cr);
     }
+    draw_pad_overlay(cr);
 }
 
 void App::draw_title(cairo_t *cr)
@@ -1120,8 +1135,10 @@ void App::draw_menu_dropdown(cairo_t *cr)
     cairo_rectangle(cr, x + 0.5, y + 0.5, w - 1, h - 1);
     cairo_stroke(cr);
     double iy = y + 4;
+    int index = 0;
     for (const MenuItem &it : items) {
-        const bool hv = it.enabled && hover(x, iy, w, ih);
+        const bool hv = it.enabled && (pad_hints() ? index == menu_item_ : hover(x, iy, w, ih));
+        ++index;
         if (hv) fill(cr, x + 2, iy, w - 4, ih, hex(0x3A4B63));
         text(cr, kMenuFont, it.label, x + 14, iy + 5, it.enabled ? kSlateInk : kSlateEdge);
         if (!it.key.empty()) text_right(cr, kTagFont, it.key, x + w - 12, iy + 9, it.enabled ? kSlateDim : kSlateEdge);
@@ -1533,13 +1550,23 @@ void App::draw_status(cairo_t *cr)
     } else if (const Unit *u = g().unit(active_)) {
         tool = std::string(unit_info(u->type).name) + ((unit_info(u->type).flags & kSettlers) ? (g().can_work(*u, Order::Clean) ? ": B R I M P" : ": B R I M") : ": F S W G");
     }
-    const Metrics tm = measure(cr, kBoldFont, tool);
-    double right = geo_.win_w - 10 - tm.w;
-    if (!tool.empty()) text(cr, kBoldFont, tool, right, ty, kSlateGold);
-    const std::string hint = "Arrows move \u00b7 Enter ends turn";
-    const Metrics hm2 = measure(cr, kUiFont, hint);
-    right -= 24 + hm2.w;
-    text(cr, kUiFont, hint, right, ty, kSlateDim);
+    double right = geo_.win_w - 10;
+    if (pad_hints()) {
+        // Controller hints (City 2 style): key caps for the pad in hand.
+        if (goto_mode_) {
+            right = draw_pad_hints(cr, right, ty, {{"D-pad", "cursor"}, {glyphs_.a, "go here"}, {glyphs_.b, "cancel"}}) + 16 - 24;
+        } else {
+            right = draw_pad_hints(cr, right, ty, map_pad_hints()) + 16 - 24;
+        }
+    } else {
+        const Metrics tm = measure(cr, kBoldFont, tool);
+        right -= tm.w;
+        if (!tool.empty()) text(cr, kBoldFont, tool, right, ty, kSlateGold);
+        const std::string hint = "Arrows move \u00b7 Enter ends turn";
+        const Metrics hm2 = measure(cr, kUiFont, hint);
+        right -= 24 + hm2.w;
+        text(cr, kUiFont, hint, right, ty, kSlateDim);
+    }
     // The news itself, clipped before the hints.
     cairo_save(cr);
     cairo_rectangle(cr, 10 + tw + 10, y, right - 24 - (10 + tw + 10), geo_.status_h);

@@ -5,6 +5,7 @@
 // Rules tests: run one named group per meson test.
 
 #include "game.hpp"
+#include "../src/ui/pad_nav.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -945,6 +946,43 @@ static void test_space_race()
     CHECK_EQ(l.civs[0].modules, 0);
 }
 
+static void test_pad_nav()
+{
+    // Deck, Xbox and PlayStation button names.
+    const pad::Glyphs deck = pad::glyphs_for(false, true);
+    CHECK(deck.a == "A" && deck.lb == "L1" && deck.view == "View" && deck.menu == "\u2630");
+    const pad::Glyphs xbox = pad::glyphs_for(false, false);
+    CHECK(xbox.lb == "LB" && xbox.menu == "Start");
+    const pad::Glyphs ps = pad::glyphs_for(true, false, true);
+    CHECK(ps.a == "\u2715" && ps.view == "Create");
+    // Hold timing: one step now, the next after the delay, then on a beat.
+    pad::Repeat r;
+    pad::repeat_press(r, 1, 0, 1000);
+    CHECK_EQ(pad::repeat_steps(r, 1000 + pad::kRepeatDelayMs - 1), 0);
+    CHECK_EQ(pad::repeat_steps(r, 1000 + pad::kRepeatDelayMs), 1);
+    CHECK_EQ(pad::repeat_steps(r, 1000 + pad::kRepeatDelayMs + pad::kRepeatIntervalMs), 1);
+    CHECK_EQ(pad::repeat_steps(r, 1000 + pad::kRepeatDelayMs + 50 * pad::kRepeatIntervalMs), 4);   // a stall owes at most four
+    pad::repeat_release(r);
+    CHECK_EQ(pad::repeat_steps(r, 99999), 0);
+    // The stick in eight directions, with a dead zone.
+    int dx = 9, dy = 9;
+    pad::stick_direction(0.1f, 0.1f, dx, dy);
+    CHECK(dx == 0 && dy == 0);
+    pad::stick_direction(0.9f, 0.0f, dx, dy);
+    CHECK(dx == 1 && dy == 0);
+    pad::stick_direction(-0.7f, -0.7f, dx, dy);
+    CHECK(dx == -1 && dy == -1);
+    pad::stick_direction(0.0f, 1.0f, dx, dy);
+    CHECK(dx == 0 && dy == 1);
+    // Focus moves between buttons the way the D-pad points.
+    const std::vector<pad::Rect> b = {{10, 10, 100, 30}, {120, 10, 100, 30}, {10, 50, 100, 30}, {400, 300, 140, 38}};
+    CHECK_EQ(pad::next_focus(b, 0, 1, 0), 1);
+    CHECK_EQ(pad::next_focus(b, 1, -1, 0), 0);
+    CHECK_EQ(pad::next_focus(b, 0, 0, 1), 2);
+    CHECK_EQ(pad::next_focus(b, 0, 0, -1), -1);
+    CHECK_EQ(pad::default_focus(b), 3);   // the bottom-right button
+}
+
 int main(int argc, char **argv)
 {
     const std::map<std::string, std::function<void()>> tests = {
@@ -952,7 +990,7 @@ int main(int argc, char **argv)
         {"units_table", test_units_table}, {"combat_odds", test_combat_odds},       {"city_growth", test_city_growth},
         {"settlers_work", test_settlers_work}, {"movement", test_movement},          {"save_roundtrip", test_save_roundtrip},
         {"ai_smoke", test_ai_smoke},           {"wonders", test_wonders}, {"envoys", test_envoys},
-        {"rail_pollution", test_rail_pollution}, {"barbarians", test_barbarians}, {"space_race", test_space_race},
+        {"rail_pollution", test_rail_pollution}, {"barbarians", test_barbarians}, {"space_race", test_space_race}, {"pad_nav", test_pad_nav},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();
