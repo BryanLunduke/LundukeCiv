@@ -1177,6 +1177,13 @@ void App::draw_map(cairo_t *cr)
             pm.blit(art::unit_card(under->type, civ_colors(g().civs[under->owner].color)), tx * T + 2, ty * T - 2);
         }
         pm.blit(art::unit_card(top->type, cc, status_letter(*top), top->veteran), tx * T, ty * T);
+        if (top->hp < kUnitHp) {
+            // Wounded: a hit-point bar down the left edge of the counter.
+            const int bh = 24, filled = std::max(1, bh * top->hp / kUnitHp);
+            const Argb col = top->hp * 3 > kUnitHp * 2 ? rgb(0x6CCB7A) : (top->hp * 3 > kUnitHp ? rgb(0xF2C14E) : rgb(0xE5675A));
+            pm.fill_rect(tx * T, ty * T + 4, 4, bh + 2, rgb(0x151B23));
+            pm.fill_rect(tx * T + 1, ty * T + 5 + (bh - filled), 2, filled, col);
+        }
         if (top->id == active_ && blink_ && dialogs_.empty()) art::bracket(pm, tx * T, ty * T, rgb(0xF2C14E), 0xA0000000);
     }
     art::apply_fog(pm, view_x_, view_y_, [&](int x, int y) { return m.valid_y(y) && ((m.at(x, y).explored >> me) & 1u); });
@@ -1300,6 +1307,16 @@ void App::draw_sidebar(cairo_t *cr)
         text(cr, kUiFont, home ? "Home: " + home->name : "No home city", tx, y + 18, kSlateDim);
         text(cr, kUiFont, "Moves " + moves_text(u->moves) + " of " + std::to_string(unit_info(u->type).moves),
              tx, y + 36, u->moves > 0 ? kSlateGood : kSlateDim);
+        if (u->hp < kUnitHp) {
+            text_right(cr, kSmallBold, "HP " + std::to_string(u->hp) + "/" + std::to_string(kUnitHp), R, y + 1,
+                       u->hp * 2 > kUnitHp ? kSlateGold : kSlateBad);
+        }
+        {
+            // Hit points under the counter.
+            const double bw = 64;
+            fill(cr, L + 4, y + 66, bw, 3, kSlatePanel);
+            fill(cr, L + 4, y + 66, bw * u->hp / kUnitHp, 3, u->hp * 2 > kUnitHp ? kSlateGood : kSlateBad);
+        }
         const Tile &t = m.at(u->x, u->y);
         std::string where = terrain_info(t.terrain).name;
         if (t.special) where = terrain_info(t.terrain).special;

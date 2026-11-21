@@ -199,7 +199,7 @@ void App::draw_message(cairo_t *cr, Dialog &d)
 void App::draw_combat(cairo_t *cr, Dialog &d)
 {
     const CombatResult &r = g().last_combat;
-    const double w = 620, h = 400, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    const double w = 660, h = 420, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
     double cy = dialog_frame(cr, x, y, w, h, d.title);
     const double colw = (w - 48) / 2;
     for (int side = 0; side < 2; ++side) {
@@ -227,17 +227,50 @@ void App::draw_combat(cairo_t *cr, Dialog &d)
         std::snprintf(buf, sizeof buf, side == 0 ? "Attack %.1f" : "Defense %.1f", side == 0 ? r.att : r.def);
         text(cr, kUiFont, buf, cx + 124, cy + 58, kSlateDim);
         text(cr, kBoldFont, lost ? "Destroyed" : "Victorious", cx + 124, cy + 82, lost ? kSlateBad : kSlateGood);
+        // Hit points: before (dim) and after (bright).
+        const int hp0 = side == 0 ? r.att_hp0 : r.def_hp0, hp1 = side == 0 ? r.att_hp : r.def_hp;
+        const double bx = cx + 124, by = cy + 108, bw = colw - 140;
+        fill(cr, bx, by, bw, 8, kSlateDeep);
+        fill(cr, bx, by, bw * hp0 / kUnitHp, 8, kSlateEdge);
+        fill(cr, bx, by, bw * hp1 / kUnitHp, 8, lost ? kSlateBad : kSlateGood);
+        text(cr, kTagFont, "HP " + std::to_string(hp1) + " / " + std::to_string(kUnitHp) + "  (was " + std::to_string(hp0) + ")",
+             bx, by + 12, kSlateDim);
     }
     cy += 150;
-    char odds[96];
-    std::snprintf(odds, sizeof odds, "Odds of the attack: %.0f%%", r.odds * 100);
+    // The fight, round by round: one pip per round, gold where the attacker
+    // scored, red where the defender did.
+    section(cr, "ROUNDS (" + std::to_string(r.rounds.size()) + ")", x + 24, cy, x + w - 24);
+    cy += 20;
+    {
+        const double pw = 12, gap = 3, avail = w - 48;
+        const int per_row = static_cast<int>((avail + gap) / (pw + gap));
+        for (size_t i = 0; i < r.rounds.size(); ++i) {
+            const int row = static_cast<int>(i) / per_row, col = static_cast<int>(i) % per_row;
+            const double px = x + 24 + col * (pw + gap), py = cy + row * (pw + gap);
+            round_rect(cr, px, py, pw, pw, 3);
+            set(cr, r.rounds[i] ? kSlateGold : kSlateBad);
+            cairo_fill(cr);
+        }
+        const int rows = r.rounds.empty() ? 1 : (static_cast<int>(r.rounds.size()) + per_row - 1) / per_row;
+        cy += rows * (pw + gap) + 10;
+    }
+    char pct[16];
+    if (r.odds > 0.995 && r.odds < 1.0) {
+        std::snprintf(pct, sizeof pct, ">99%%");
+    } else if (r.odds < 0.005 && r.odds > 0.0) {
+        std::snprintf(pct, sizeof pct, "<1%%");
+    } else {
+        std::snprintf(pct, sizeof pct, "%.0f%%", r.odds * 100);
+    }
+    char odds[160];
+    std::snprintf(odds, sizeof odds, "Attacker's chance: %s to win  \u00b7  %.0f%% each round", pct, r.round_odds * 100);
     text(cr, kBoldFont, odds, x + 24, cy, kSlateGold);
     cy += 26;
     std::string extra;
     if (r.attacker_won && r.killed > 1) extra = "The whole stack of " + std::to_string(r.killed) + " units was lost. ";
-    if (r.city_shrank) extra += "The city shrinks.";
-    text(cr, kUiFont, extra.empty() ? "Strength = attack against defense, after terrain, fortification, walls and veterans."
-                                     : extra, x + 24, cy, kSlateDim, 1.0, static_cast<int>(w - 48));
+    if (r.city_shrank) extra += "The city shrinks. ";
+    extra += "Each round the loser loses one hit point; strength counts terrain, fortification, walls and veterans.";
+    text(cr, kUiFont, extra, x + 24, cy, kSlateDim, 1.0, static_cast<int>(w - 48));
     const double bx = x + w - 24 - 140, by = y + h - 56;
     wide_button(cr, bx, by, 140, 38, "OK", "Enter", true, hover(bx, by, 140, 38));
     hot(bx, by, 140, 38, [this] { close_top(); });

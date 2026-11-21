@@ -252,9 +252,21 @@ static void test_combat_odds()
     g.cities.push_back(c);
     CHECK(std::fabs(g.defense_strength(*g.unit(d), g.unit(a)) - 6.0) < 1e-9);
     g.cities.clear();
-    // Empirical odds: Legion (3) vs Phalanx (2) on grassland -> 60%.
+    // Round-by-round odds: equal strength is a coin toss; more hit points or
+    // strength help; the closed form matches a direct count.
+    CHECK(std::fabs(combat_win_chance(2, 2, 10, 10) - 0.5) < 1e-9);
+    CHECK(std::fabs(combat_win_chance(1, 1, 1, 1) - 0.5) < 1e-9);
+    CHECK(std::fabs(combat_win_chance(3, 1, 1, 1) - 0.75) < 1e-9);
+    // One hit point each side, two rounds needed against 2: p^2 = 0.36.
+    CHECK(std::fabs(combat_win_chance(3, 2, 1, 2) - 0.36) < 1e-9);
+    CHECK(combat_win_chance(3, 2, 10, 10) > 0.6);
+    CHECK(combat_win_chance(3, 2, 3, 10) < combat_win_chance(3, 2, 10, 10));
+    CHECK_EQ(static_cast<long long>(combat_win_chance(5, 0, 1, 10) * 1000), 1000);
+    // Empirical: Legion (3) vs Phalanx (2) on grassland, 10 hit points each.
+    const double expect = combat_win_chance(3, 2, kUnitHp, kUnitHp);
+    CHECK(expect > 0.78 && expect < 0.84);
     int wins = 0;
-    const int n = 4000;
+    const int n = 3000;
     for (int i = 0; i < n; ++i) {
         Game t = flat_game();
         t.rng.reseed(1000 + i);
@@ -263,12 +275,43 @@ static void test_combat_odds()
         const int ai = place(t, 0, UnitType::Legion, 10, 10);
         place(t, 1, UnitType::Phalanx, 11, 10);
         place(t, 1, UnitType::Settlers, 12, 12); // keeps civ 1 alive
+        place(t, 0, UnitType::Settlers, 30, 30); // and us
         t.attack(ai, 11, 10);
-        wins += t.last_combat.attacker_won ? 1 : 0;
-        CHECK(std::fabs(t.last_combat.odds - 0.6) < 1e-9);
+        const CombatResult &r = t.last_combat;
+        wins += r.attacker_won ? 1 : 0;
+        CHECK(std::fabs(r.odds - expect) < 1e-9);
+        CHECK(std::fabs(r.round_odds - 0.6) < 1e-9);
+        // Every round costs exactly one hit point; the loser ends at zero.
+        int att_lost = 0, def_lost = 0;
+        for (auto w : r.rounds) (w ? def_lost : att_lost)++;
+        CHECK_EQ(att_lost, r.att_hp0 - r.att_hp);
+        CHECK_EQ(def_lost, r.def_hp0 - r.def_hp);
+        CHECK(r.attacker_won ? (r.def_hp == 0 && r.att_hp > 0) : (r.att_hp == 0 && r.def_hp > 0));
+        // The survivor carries its wounds.
+        if (r.attacker_won) {
+            CHECK_EQ(t.unit(ai)->hp, r.att_hp);
+        }
     }
     const double rate = static_cast<double>(wins) / n;
-    CHECK(rate > 0.56 && rate < 0.64);
+    CHECK(std::fabs(rate - expect) < 0.03);
+    // Wounds heal: +1 a turn in the field, +3 fortified, all at once in a city.
+    {
+        Game h = flat_game();
+        const int u1 = place(h, 0, UnitType::Phalanx, 10, 10);
+        const int u2 = place(h, 0, UnitType::Phalanx, 20, 10);
+        place(h, 1, UnitType::Settlers, 40, 40);
+        place(h, 0, UnitType::Settlers, 30, 30); // keeps us alive
+        h.unit(u1)->hp = 4;
+        h.unit(u2)->hp = 4;
+        h.unit(u2)->order = Order::Fortified;
+        h.end_turn();
+        CHECK_EQ(h.unit(u1)->hp, 5);
+        CHECK_EQ(h.unit(u2)->hp, 7);
+        const int s = place(h, 0, UnitType::Settlers, 10, 10);
+        CHECK(h.found_city(s, "Mend"));
+        h.end_turn();
+        CHECK_EQ(h.unit(u1)->hp, kUnitHp);
+    }
     // A win outside a city destroys the whole stack.
     Game s = flat_game();
     s.civs[0].war = 2;

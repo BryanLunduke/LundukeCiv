@@ -578,6 +578,22 @@ double Game::defense_strength(const Unit &d, const Unit *attacker) const
     return s;
 }
 
+double combat_win_chance(double att, double def, int att_hp, int def_hp)
+{
+    if (def_hp <= 0) return 1.0;
+    if (att_hp <= 0) return 0.0;
+    if (att + def <= 0) return 0.5;
+    const double p = att / (att + def);
+    // win[a][d]: the attacker wins from a hit points against d.
+    std::vector<double> row(static_cast<size_t>(def_hp) + 1, 0.0), prev(static_cast<size_t>(def_hp) + 1, 0.0);
+    for (int a = 1; a <= att_hp; ++a) {
+        row[0] = 1.0;
+        for (int d = 1; d <= def_hp; ++d) row[d] = p * row[d - 1] + (1 - p) * prev[d];
+        prev = row;
+    }
+    return prev[def_hp];
+}
+
 MoveResult Game::attack(int unit_id, int tx, int ty)
 {
     Unit *a = unit(unit_id);
@@ -585,15 +601,16 @@ MoveResult Game::attack(int unit_id, int tx, int ty)
     tx = map.wrap_x(tx);
     std::vector<int> here = units_at(tx, ty);
     if (here.empty()) return MoveResult::Failed;
-    // The strongest defender stands up.
+    // The defender most likely to hold stands up.
+    const double att = attack_strength(*a);
     int best = -1;
-    double best_d = -1;
+    double best_hold = -1;
     for (int id : here) {
         const Unit *d = unit(id);
         if (d->carried_by >= 0 && map.ocean(tx, ty)) continue;
-        const double s = defense_strength(*d, a);
-        if (s > best_d) {
-            best_d = s;
+        const double hold = 1.0 - combat_win_chance(att, defense_strength(*d, a), a->hp, d->hp);
+        if (hold > best_hold) {
+            best_hold = hold;
             best = id;
         }
     }
@@ -607,18 +624,35 @@ MoveResult Game::attack(int unit_id, int tx, int ty)
     r.def_type = d->type;
     r.att_owner = att_owner;
     r.def_owner = def_owner;
-    r.att = attack_strength(*a);
-    r.def = best_d;
-    r.odds = r.att + r.def > 0 ? r.att / (r.att + r.def) : 1.0;
+    r.att = att;
+    r.def = defense_strength(*d, a);
+    r.round_odds = r.att + r.def > 0 ? r.att / (r.att + r.def) : 1.0;
+    r.att_hp0 = a->hp;
+    r.def_hp0 = d->hp;
+    r.odds = combat_win_chance(r.att, r.def, a->hp, d->hp);
     r.x = tx;
     r.y = ty;
     r.turn = turn;
-    r.attacker_won = rng.unit() < r.odds;
+    // Fight it out round by round.
+    int ahp = a->hp, dhp = d->hp;
+    while (ahp > 0 && dhp > 0) {
+        if (rng.unit() < r.round_odds) {
+            --dhp;
+            r.rounds.push_back(1);
+        } else {
+            --ahp;
+            r.rounds.push_back(0);
+        }
+    }
+    r.att_hp = ahp;
+    r.def_hp = dhp;
+    r.attacker_won = dhp <= 0;
     a->moves = std::max(0, a->moves - 3);
     if (a->order == Order::Fortified || a->order == Order::Fortifying) a->order = Order::None;
     const std::string an = unit_name(*a), dn = unit_name(*d);
     City *c = city_at(tx, ty);
     if (r.attacker_won) {
+        a->hp = ahp;
         if (!a->veteran && rng.chance(0.5)) a->veteran = true;
         const bool single = c || map.at(tx, ty).fortress;
         if (single) {
@@ -635,6 +669,7 @@ MoveResult Game::attack(int unit_id, int tx, int ty)
         say(att_owner, MsgKind::Combat, "Your " + std::string(unit_info(r.att_type).name) + " defeated the " + dn + ".", tx, ty);
         say(def_owner, MsgKind::Combat, "Your " + std::string(unit_info(r.def_type).name) + " was destroyed by the " + an + ".", tx, ty);
     } else {
+        d->hp = dhp;
         if (!d->veteran && rng.chance(0.5)) d->veteran = true;
         kill_unit(unit_id);
         r.killed = 1;
@@ -1523,6 +1558,16 @@ void Game::start_turn_for(int ci)
         if (!u) continue;
         u->moves = full_moves(*u);
         u->done = false;
+        // Wounds heal: fully in a city of ours, faster when resting.
+        if (u->hp < kUnitHp) {
+            const City *hc = city_at(u->x, u->y);
+            if (hc && hc->owner == ci) {
+                u->hp = kUnitHp;
+            } else {
+                const bool resting = u->order == Order::Fortified || u->order == Order::Fortifying || u->order == Order::Sentry;
+                u->hp = std::min(kUnitHp, u->hp + (resting ? 3 : 1));
+            }
+        }
         if (u->order == Order::Fortifying) u->order = Order::Fortified;
         if (u->order == Order::Road || u->order == Order::Irrigate || u->order == Order::Mine || u->order == Order::Fortress) {
             u->moves = 0;

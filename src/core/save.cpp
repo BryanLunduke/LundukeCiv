@@ -8,6 +8,7 @@
 
 #include "game.hpp"
 
+#include <algorithm>
 #include <cstdio>
 #include <sstream>
 
@@ -89,7 +90,7 @@ std::string save_game(const Game &g)
     for (const Unit &u : g.units) {
         o << "unit|" << u.id << "|" << static_cast<int>(u.type) << "|" << u.owner << "|" << u.x << "|" << u.y << "|"
           << u.moves << "|" << u.veteran << "|" << static_cast<int>(u.order) << "|" << u.work << "|" << u.home << "|"
-          << u.goto_x << "|" << u.goto_y << "|" << u.fuel << "|" << u.carried_by << "|" << u.done << "\n";
+          << u.goto_x << "|" << u.goto_y << "|" << u.fuel << "|" << u.carried_by << "|" << u.done << "|" << u.hp << "\n";
     }
     o << "end\n";
     return o.str();
@@ -209,6 +210,7 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             u.fuel = static_cast<int>(num(f, 13));
             u.carried_by = static_cast<int>(num(f, 14));
             u.done = num(f, 15) != 0;
+            u.hp = f.size() > 16 ? std::clamp(static_cast<int>(num(f, 16)), 1, kUnitHp) : kUnitHp;
             g.units.push_back(u);
         } else if (k == "end") {
             ended = true;

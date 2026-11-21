@@ -340,13 +340,14 @@ void Game::ai_unit(Unit &start)
         if (u && u->order == Order::None) u->order = Order::Sentry;
         return;
     }
-    auto best_defense_at = [&](const Unit &att, int x, int y) {
-        double best = 0;
+    // Chance to beat the best defender on a square.
+    auto win_chance_at = [&](const Unit &att, int x, int y) {
+        double worst = 1.0;
         for (int did : units_at(x, y)) {
             const Unit *d = unit(did);
-            best = std::max(best, defense_strength(*d, &att));
+            worst = std::min(worst, combat_win_chance(attack_strength(att), defense_strength(*d, &att), att.hp, d->hp));
         }
-        return best;
+        return worst;
     };
     // A city of ours that needs a garrison?
     auto garrison_need = [&](const City &c) {
@@ -372,6 +373,15 @@ void Game::ai_unit(Unit &start)
             }
         }
     }
+    {
+        // Badly hurt: rest where it stands (healing is faster fortified,
+        // complete in a city).
+        Unit *u = unit(id);
+        if (u && u->hp <= kUnitHp / 2 && !city_at(u->x, u->y)) {
+            fortify(id);
+            return;
+        }
+    }
     for (int guard = 0; guard < 12; ++guard) {
         Unit *u = unit(id);
         if (!u || u->moves <= 0) return;
@@ -385,8 +395,7 @@ void Game::ai_unit(Unit &start)
                 if (!map.land(x, y)) continue;
                 const int o = owner_at(x, y);
                 if (o < 0 || o == ci || !at_war(ci, o) || units_at(x, y).empty()) continue;
-                const double a = attack_strength(*u), d = best_defense_at(*u, x, y);
-                const double odds = a + d > 0 ? a / (a + d) : 0;
+                const double odds = win_chance_at(*u, x, y);
                 if (odds > best_odds) {
                     best_odds = odds;
                     ax = i;
@@ -394,7 +403,7 @@ void Game::ai_unit(Unit &start)
                 }
             }
         }
-        if (best_odds >= 0.45 && info.attack > 0) {
+        if (best_odds >= 0.55 && info.attack > 0) {
             move(id, ax, ay);
             continue;
         }
@@ -419,8 +428,7 @@ void Game::ai_unit(Unit &start)
             const int nx = map.wrap_x(u->x + sx), ny = u->y + sy;
             const int o = owner_at(nx, ny);
             if (o >= 0 && o != ci && !units_at(nx, ny).empty()) {
-                const double a = attack_strength(*u), d = best_defense_at(*u, nx, ny);
-                if (a / (a + d + 1e-9) < 0.3) {
+                if (win_chance_at(*u, nx, ny) < 0.25) {
                     fortify(id); // wait for reinforcements
                     return;
                 }

@@ -20,6 +20,7 @@
 namespace civ {
 
 constexpr int kMaxCivs = 8;
+constexpr int kUnitHp = 10;   // hit points of a healthy unit; each lost combat round costs one
 
 enum class Order : std::uint8_t { None, Fortifying, Fortified, Sentry, Goto, Road, Irrigate, Mine, Fortress };
 
@@ -39,6 +40,7 @@ struct Unit {
     int fuel = 0;           // air units: turns left aloft
     int carried_by = -1;    // ship id when aboard
     bool done = false;      // skipped for this turn
+    int hp = kUnitHp;       // damage from combat heals over a few turns
 };
 
 struct CityStats {
@@ -123,7 +125,13 @@ struct CombatResult {
     int def_owner = 0;
     double att = 0;
     double def = 0;
-    double odds = 0;        // attacker's chance
+    double odds = 0;        // attacker's chance to win the whole fight
+    double round_odds = 0;  // attacker's chance to win any one round
+    int att_hp0 = 0;        // hit points going in
+    int def_hp0 = 0;
+    int att_hp = 0;         // hit points left
+    int def_hp = 0;
+    std::vector<std::uint8_t> rounds; // 1: the attacker won that round
     bool attacker_won = false;
     int x = 0;
     int y = 0;
@@ -135,6 +143,11 @@ struct CombatResult {
 enum class MoveResult : std::uint8_t {
     Moved, Attacked, Captured, Boarded, Blocked, NoMoves, NeedWar, Zoc, Failed, Destroyed
 };
+
+// Combat is fought in rounds: each round the attacker wins with chance
+// att / (att + def) and the loser of the round loses one hit point; the
+// first side out of hit points loses. This is the chance the attacker wins.
+double combat_win_chance(double att, double def, int att_hp, int def_hp);
 
 struct GameSettings {
     std::uint64_t seed = 1;
