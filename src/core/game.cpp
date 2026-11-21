@@ -138,6 +138,17 @@ Game Game::create(const GameSettings &s)
             g.add_unit(i, UnitType::Settlers, bx, by, -1);
         }
     }
+    // The barbarians: an extra people with no land, at war with everyone.
+    if (n < kMaxCivs) {
+        Civ b;
+        b.name = "Barbarians";
+        b.leader = "Chieftain";
+        b.color = 8;
+        b.ai = true;
+        b.barbarian = true;
+        b.gold = 0;
+        g.civs.push_back(b);   // at_war() is always true against them
+    }
     g.refresh_visibility();
     g.say(0, MsgKind::Info, "Your people, the " + g.civs[0].name + ", await your command, " + g.civs[0].leader + ".");
     return g;
@@ -435,6 +446,7 @@ void Game::learn(int civ, Advance a)
 bool Game::unit_available(int civ, UnitType u) const
 {
     const UnitInfo &i = unit_info(u);
+    if (i.flags & kNoBuild) return false;
     if (!has(civ, i.tech)) return false;
     if (i.obsolete != Advance::None && has(civ, i.obsolete)) return false;
     if ((i.flags & kNuclear) && !wonder_built(Wonder::Manhattan)) return false; // needs the Manhattan Project somewhere
@@ -492,6 +504,12 @@ Yield Game::tile_yield(int x, int y, int civ, bool centre) const
         if (v.trade >= 1) v.trade += 1;
     }
     if (centre) v.shields = std::max(1, v.shields);
+    if (t.railroad) v.shields += v.shields / 2;
+    if (t.pollution) {
+        v.food /= 2;
+        v.shields /= 2;
+        v.trade /= 2;
+    }
     return v;
 }
 
@@ -604,6 +622,18 @@ void Game::update_city(City &c)
             shields = shields * pct / 100;
         }
         s.shield_surplus = shields - s.shield_upkeep;
+        {
+            // Pollution: industry over 20 shields, and from Industrialization
+            // on, a crowd of citizens (unless Mass Transit carries them).
+            int industry = shields;
+            if (c.has(Building::RecyclingCenter)) industry /= 3;
+            if (c.has(Building::HydroPlant) || c.has(Building::NuclearPlant) || hoover_here(c)) industry = industry * 3 / 4;
+            int tech = 0;
+            for (Advance a : {Advance::Industrialization, Advance::Automobile, Advance::MassProduction, Advance::Plastics})
+                tech += has(c.owner, a) ? 1 : 0;
+            const int people = c.has(Building::MassTransit) ? 0 : c.size * tech / 4;
+            s.pollution = std::clamp(industry + people - 20, 0, 100);
+        }
         // Corruption grows with distance from the Palace.
         int dist = 20;
         for (const City &o : cities) {
@@ -757,6 +787,309 @@ int Game::buy_cost(const City &c) const
     if (c.shields == 0) cost *= 2;
     if (c.build_unit) cost = cost * 2; // units cost more to rush
     return cost;
+}
+
+// ---------------------------------------------------------------- pollution
+
+int Game::polluted_squares() const
+{
+    int n = 0;
+    for (const Tile &t : map.tiles) n += t.pollution;
+    return n;
+}
+
+int Game::pollution_chance(const City &c) const { return c.stats.pollution; }
+
+int Game::warming_risk() const { return std::min(100, warming * 100 / kWarmingThreshold); }
+
+void Game::pollute(City &c)
+{
+    std::vector<std::pair<int, int>> spots;
+    for (const auto &o : kCross) {
+        const int x = map.wrap_x(c.x + o[0]), y = c.y + o[1];
+        if (!map.land(x, y) || map.at(x, y).pollution) continue;
+        spots.push_back({x, y});
+    }
+    if (map.land(c.x, c.y) && !map.at(c.x, c.y).pollution) spots.push_back({c.x, c.y});
+    if (spots.empty()) return;
+    const auto p = spots[rng.below(static_cast<int>(spots.size()))];
+    map.at(p.first, p.second).pollution = true;
+    say(c.owner, MsgKind::Bad, "Pollution near " + c.name + ". Settlers can clean it up (P).", p.first, p.second);
+}
+
+void Game::global_warming()
+{
+    warming = 0;
+    ++warming_events;
+    // Coasts flood into swamp, fields dry to desert, forests turn to jungle.
+    int changed = 0;
+    for (int tries = 0; tries < 4000 && changed < 40; ++tries) {
+        const int x = rng.below(map.w), y = 2 + rng.below(map.h - 4);
+        Tile &t = map.at(x, y);
+        if (t.terrain == Terrain::Ocean || city_at(x, y)) continue;
+        Terrain to = t.terrain;
+        const bool coast = map.coastal(x, y);
+        switch (t.terrain) {
+        case Terrain::Grassland:
+        case Terrain::Plains: to = coast ? Terrain::Swamp : Terrain::Desert; break;
+        case Terrain::Desert: if (coast) to = Terrain::Swamp; break;
+        case Terrain::Forest: to = Terrain::Jungle; break;
+        case Terrain::Arctic: to = Terrain::Tundra; break;
+        case Terrain::Tundra: to = Terrain::Desert; break;
+        default: break;
+        }
+        if (to == t.terrain) continue;
+        t.terrain = to;
+        t.irrigation = false;
+        t.mine = false;
+        ++changed;
+    }
+    say(-1, MsgKind::Bad, "Global warming! Pollution has changed the climate: coasts turn to swamp and fields to desert.");
+    for (City &c : cities) update_city(c);
+}
+
+// ---------------------------------------------------------------- barbarians
+
+int Game::barbarian_civ() const
+{
+    for (int i = 0; i < static_cast<int>(civs.size()); ++i) {
+        if (civs[i].barbarian) return i;
+    }
+    return -1;
+}
+
+int Game::ransom(int unit_id, int tx, int ty)
+{
+    const Unit *u = unit(unit_id);
+    if (!u || city_at(tx, ty)) return 0;
+    const std::vector<int> here = units_at(tx, ty);
+    if (here.empty()) return 0;
+    for (int id : here) {
+        const Unit *v = unit(id);
+        if (!v || v->type != UnitType::Leader || v->owner == u->owner) return 0;
+    }
+    const int me = u->owner;
+    const int gold = 100 * static_cast<int>(here.size());
+    for (int id : here) kill_unit(id);
+    civs[me].gold += gold;
+    say(me, MsgKind::Good, "You capture a barbarian leader! His people pay " + std::to_string(gold) + " gold in ransom.", tx, ty);
+    return gold;
+}
+
+namespace {
+
+std::vector<UnitType> barbarian_army(int era, int difficulty, Rng &rng)
+{
+    static const std::vector<UnitType> eras[] = {
+        {UnitType::Legion, UnitType::Legion, UnitType::Militia},
+        {UnitType::Legion, UnitType::Knights, UnitType::Catapult},
+        {UnitType::Knights, UnitType::Knights, UnitType::Catapult},
+        {UnitType::Musketeers, UnitType::Knights, UnitType::Cannon},
+        {UnitType::Riflemen, UnitType::Cavalry, UnitType::Cannon},
+        {UnitType::Riflemen, UnitType::Artillery, UnitType::Armor},
+    };
+    const std::vector<UnitType> &pool = eras[std::clamp(era, 0, 5)];
+    std::vector<UnitType> out;
+    const int n = 2 + (difficulty >= 3 ? 1 : 0) + rng.below(2);
+    for (int i = 0; i < n; ++i) out.push_back(pool[static_cast<size_t>(i) % pool.size()]);
+    return out;
+}
+
+} // namespace
+
+bool Game::barbarian_landing(int bc, UnitType ship, const std::vector<UnitType> &army)
+{
+    std::vector<int> targets;
+    for (const City &c : cities) {
+        if (!civs[c.owner].barbarian && map.coastal(c.x, c.y)) targets.push_back(c.id);
+    }
+    if (targets.empty()) return false;
+    for (int attempt = 0; attempt < 6; ++attempt) {
+        const City *c = city(targets[rng.below(static_cast<int>(targets.size()))]);
+        std::vector<std::array<int, 4>> spots;   // land x, y, sea x, y
+        for (int j = -3; j <= 3; ++j) {
+            for (int i = -3; i <= 3; ++i) {
+                const int x = map.wrap_x(c->x + i), y = c->y + j;
+                const int d = map.distance(x, y, c->x, c->y);
+                if (d < 2 || !map.land(x, y) || city_at(x, y) || owner_at(x, y) >= 0) continue;
+                for (int b = -1; b <= 1; ++b) {
+                    for (int a = -1; a <= 1; ++a) {
+                        const int sx = map.wrap_x(x + a), sy = y + b;
+                        if (map.ocean(sx, sy) && owner_at(sx, sy) < 0) spots.push_back({x, y, sx, sy});
+                    }
+                }
+            }
+        }
+        if (spots.empty()) continue;
+        const auto sp = spots[rng.below(static_cast<int>(spots.size()))];
+        const int sid = add_unit(bc, ship, sp[2], sp[3], -1);
+        if (Unit *s = unit(sid)) {
+            s->order = Order::Sentry;
+            s->work = 0;
+        }
+        for (UnitType t : army) {
+            const int id = add_unit(bc, t, sp[0], sp[1], -1);
+            if (Unit *u = unit(id)) u->moves = 0;
+        }
+        const int lid = add_unit(bc, UnitType::Leader, sp[0], sp[1], -1);
+        if (Unit *l = unit(lid)) l->moves = 0;
+        say(c->owner, MsgKind::Bad, "Barbarians from the sea land near " + c->name + "!", sp[0], sp[1]);
+        return true;
+    }
+    return false;
+}
+
+bool Game::barbarian_uprising(int bc, const std::vector<UnitType> &army)
+{
+    for (int tries = 0; tries < 400; ++tries) {
+        const int x = rng.below(map.w), y = 2 + rng.below(map.h - 4);
+        if (!map.land(x, y) || city_at(x, y) || owner_at(x, y) >= 0) continue;
+        const City *closest = nullptr;
+        int best = 99;
+        for (const City &c : cities) {
+            if (civs[c.owner].barbarian || map.at(c.x, c.y).continent != map.at(x, y).continent) continue;
+            const int d = map.distance(x, y, c.x, c.y);
+            if (d < best) {
+                best = d;
+                closest = &c;
+            }
+        }
+        if (!closest || best < 4 || best > 8) continue;
+        for (UnitType t : army) {
+            const int id = add_unit(bc, t, x, y, -1);
+            if (Unit *u = unit(id)) u->moves = 0;
+        }
+        const int lid = add_unit(bc, UnitType::Leader, x, y, -1);
+        if (Unit *l = unit(lid)) l->moves = 0;
+        say(closest->owner, MsgKind::Bad, "A barbarian uprising near " + closest->name + "!", x, y);
+        return true;
+    }
+    return false;
+}
+
+void Game::spawn_barbarians(bool force_sea, bool force_land)
+{
+    const int bc = barbarian_civ();
+    if (bc < 0) return;
+    const bool forced = force_sea || force_land;
+    if (!forced) {
+        if (turn < 50) return;
+        const double p = 0.03 + 0.01 * static_cast<int>(difficulty);
+        if (!rng.chance(p)) return;
+    }
+    int known = 0;
+    for (int c = 0; c < static_cast<int>(civs.size()); ++c) {
+        if (!civs[c].barbarian && civs[c].alive) known = std::max(known, techs_known(c));
+    }
+    const int era = known / 12;
+    const std::vector<UnitType> army = barbarian_army(era, static_cast<int>(difficulty), rng);
+    const UnitType ship = era <= 1 ? UnitType::Trireme : (era <= 3 ? UnitType::Sail : UnitType::Frigate);
+    const bool sea = force_sea || (!force_land && rng.chance(0.5));
+    if (sea && barbarian_landing(bc, ship, army)) return;
+    if (!force_sea) barbarian_uprising(bc, army);
+}
+
+void Game::ai_barbarians(int bc)
+{
+    std::vector<int> ids;
+    for (const Unit &u : units) {
+        if (u.owner == bc) ids.push_back(u.id);
+    }
+    for (City &c : cities) {
+        if (c.owner == bc && (c.shields == 0 || !can_build(c, c.build_unit, c.build))) ai_city(c);
+    }
+    for (int id : ids) {
+        Unit *u = unit(id);
+        if (!u) continue;
+        const UnitInfo &info = unit_info(u->type);
+        if (info.domain == Domain::Sea) {
+            // The longships sail away once their raiders are ashore.
+            if (++u->work >= 3) kill_unit(id);
+            continue;
+        }
+        if (u->type == UnitType::Leader) {
+            // Keep close to the strongest band.
+            const Unit *band = nullptr;
+            int bd = 99;
+            for (const Unit &o : units) {
+                if (o.owner != bc || o.id == id || !military(o.type)) continue;
+                const int d = map.distance(o.x, o.y, u->x, u->y);
+                if (d < bd) {
+                    bd = d;
+                    band = &o;
+                }
+            }
+            if (!band && !city_at(u->x, u->y)) {
+                // Alone, with no band to lead: he slips away after a while.
+                if (++u->work >= 5) kill_unit(id);
+                continue;
+            }
+            if (band && bd > 0) {
+                int sx = 0, sy = 0;
+                const int bx = band->x, by = band->y;
+                if (next_step(*u, bx, by, sx, sy, 800)) move(id, sx, sy);
+            }
+            continue;
+        }
+        // A barbarian city keeps one guard.
+        if (const City *home = city_at(u->x, u->y)) {
+            int guards = 0;
+            for (const Unit &o : units) guards += o.owner == bc && o.x == home->x && o.y == home->y && military(o.type);
+            if (guards <= 1) {
+                u->order = Order::Fortified;
+                continue;
+            }
+        }
+        // March on the nearest city of anyone else on this landmass.
+        const int cont = map.at(u->x, u->y).continent;
+        const City *target = nullptr;
+        int best = 17;
+        for (const City &c : cities) {
+            if (c.owner == bc || map.at(c.x, c.y).continent != cont) continue;
+            const int d = map.distance(u->x, u->y, c.x, c.y);
+            if (d < best) {
+                best = d;
+                target = &c;
+            }
+        }
+        const int tx = target ? target->x : -1, ty = target ? target->y : -1;
+        for (int guard = 0; guard < 6; ++guard) {
+            u = unit(id);
+            if (!u || u->moves <= 0) break;
+            u->order = Order::None;
+            // Fight anything weak enough next to us; take empty cities.
+            int ax = 0, ay = 0;
+            double odds = 0;
+            for (int j = -1; j <= 1; ++j) {
+                for (int i = -1; i <= 1; ++i) {
+                    if (!i && !j) continue;
+                    const int x = map.wrap_x(u->x + i), y = u->y + j;
+                    if (!map.land(x, y)) continue;
+                    const int o = owner_at(x, y);
+                    if (o < 0 || o == bc) continue;
+                    double p = 1.0;
+                    for (int did : units_at(x, y)) {
+                        const Unit *d = unit(did);
+                        p = std::min(p, combat_win_chance(attack_strength(*u), defense_strength(*d, u), u->hp, d->hp));
+                    }
+                    if (p > odds) {
+                        odds = p;
+                        ax = i;
+                        ay = j;
+                    }
+                }
+            }
+            if (odds >= 0.3 && info.attack > 0) {
+                move(id, ax, ay);
+                continue;
+            }
+            if (tx < 0) break;
+            int sx = 0, sy = 0;
+            if (!next_step(*u, tx, ty, sx, sy, 2000)) break;
+            const MoveResult r = move(id, sx, sy);
+            if (r == MoveResult::Blocked || r == MoveResult::Zoc || r == MoveResult::Failed || r == MoveResult::NoMoves) break;
+        }
+    }
 }
 
 // ---------------------------------------------------------------- diplomats
@@ -1171,6 +1504,7 @@ int Game::move_cost(const Unit &u, int fx, int fy, int tx, int ty) const
     const Tile &b = map.at(tx, ty);
     const bool road_a = a.road || city_at(fx, fy);
     const bool road_b = b.road || city_at(tx, ty);
+    if (a.railroad && b.railroad) return 0;   // railroads: free movement
     if (road_a && road_b) return 1;
     if (b.terrain == Terrain::Ocean) return 3;
     return terrain_info(b.terrain).move * 3;
@@ -1202,6 +1536,11 @@ MoveResult Game::move(int unit_id, int dx, int dy)
     const int tx = map.wrap_x(u->x + dx), ty = u->y + dy;
     if (!map.valid_y(ty) || (dx == 0 && dy == 0)) return MoveResult::Blocked;
     const UnitInfo &i = unit_info(u->type);
+    // A barbarian Leader caught alone is ransomed.
+    if (i.domain == Domain::Land && military(u->type) && ransom(unit_id, tx, ty) > 0) {
+        u = unit(unit_id);
+        if (!u) return MoveResult::Failed;
+    }
     // Foreign units or city in the way.
     const int other = owner_at(tx, ty);
     if (other >= 0 && other != u->owner) {
@@ -1482,7 +1821,12 @@ void Game::kill_unit(int id)
 
 void Game::kill_stack(int x, int y)
 {
-    for (int id : units_at(x, y)) kill_unit(id);
+    // A barbarian Leader slips away from the slaughter, to be caught alone.
+    for (int id : units_at(x, y)) {
+        const Unit *u = unit(id);
+        if (u && u->type == UnitType::Leader) continue;
+        kill_unit(id);
+    }
 }
 
 bool Game::can_work(const Unit &u, Order job) const
@@ -1514,6 +1858,8 @@ bool Game::can_work(const Unit &u, Order job) const
         if (ti.mine_turns == 0 || t.mine || city_at(u.x, u.y)) return false;
         return true;
     case Order::Fortress: return has(u.owner, Advance::Construction) && !t.fortress && !city_at(u.x, u.y);
+    case Order::Railroad: return has(u.owner, Advance::Railroad) && t.road && !t.railroad && !city_at(u.x, u.y);
+    case Order::Clean: return t.pollution;
     default: return false;
     }
 }
@@ -1636,7 +1982,7 @@ bool Game::join_city(int unit_id)
 
 void Game::declare_war(int a, int b)
 {
-    if (a == b) return;
+    if (a == b || is_barbarian(a) || is_barbarian(b)) return;
     civs[a].war |= static_cast<std::uint8_t>(1u << b);
     civs[b].war |= static_cast<std::uint8_t>(1u << a);
     say(a, MsgKind::Bad, "You are at war with the " + civs[b].name + ".");
@@ -1645,6 +1991,7 @@ void Game::declare_war(int a, int b)
 
 void Game::make_peace(int a, int b)
 {
+    if (is_barbarian(a) || is_barbarian(b)) return;   // no peace with raiders
     civs[a].war &= static_cast<std::uint8_t>(~(1u << b));
     civs[b].war &= static_cast<std::uint8_t>(~(1u << a));
 }
@@ -1810,7 +2157,7 @@ void Game::begin_human_phase()
 void Game::check_elimination()
 {
     for (int c = 0; c < static_cast<int>(civs.size()); ++c) {
-        if (!civs[c].alive) continue;
+        if (!civs[c].alive || civs[c].barbarian) continue;
         bool has_city = false, has_settlers = false;
         for (const City &ct : cities) has_city |= ct.owner == c;
         for (const Unit &u : units) has_settlers |= (u.owner == c && (unit_info(u.type).flags & kSettlers));
@@ -1827,7 +2174,7 @@ void Game::check_elimination()
     }
     int alive = 0, last = -1;
     for (int c = 0; c < static_cast<int>(civs.size()); ++c) {
-        if (civs[c].alive) {
+        if (civs[c].alive && !civs[c].barbarian) {
             ++alive;
             last = c;
         }
@@ -1895,6 +2242,12 @@ void Game::process_city(City &c, bool &learned_any)
         c.shields = std::max(0, c.shields);
     }
     c.bought = false;
+    if (has(c.owner, Advance::Railroad)) {
+        Tile &ct = map.at(c.x, c.y);
+        ct.road = true;
+        ct.railroad = true;
+    }
+    if (s.pollution > 0 && rng.below(100) < s.pollution) pollute(c);
     if (!can_build(c, c.build_unit, c.build)) {
         c.build_unit = true;
         c.build = static_cast<int>(unit_available(c.owner, UnitType::Phalanx) ? UnitType::Phalanx : UnitType::Militia);
@@ -1908,6 +2261,14 @@ void Game::process_city(City &c, bool &learned_any)
         }
     }
     const int cost = production_cost(c);
+    if (civ.barbarian && c.build_unit && c.shields >= cost) {
+        // Raiders hold what they took but do not breed armies: a few
+        // troops per city at most.
+        int raiders = 0, held = 0;
+        for (const Unit &u : units) raiders += u.owner == c.owner && military(u.type);
+        for (const City &o : cities) held += o.owner == c.owner;
+        if (raiders >= std::min(held + 2, 10)) c.shields = cost - 1;
+    }
     if (c.shields >= cost) {
         if (c.build_unit) {
             const UnitType t = static_cast<UnitType>(c.build);
@@ -2011,13 +2372,23 @@ void Game::start_turn_for(int ci)
         say(ci, MsgKind::Bad, std::string("Short of gold: the ") + building_info(sell_b).name + " in " + sell_city->name + " is sold.",
             sell_city->x, sell_city->y);
     }
+    if (civ.barbarian) {
+        // Raiders know whatever the world knows, for their cities' builds.
+        for (int a = 0; a < kAdvanceCount; ++a) {
+            bool any = false;
+            for (const Civ &o : civs) any |= !o.barbarian && o.alive && o.techs[a];
+            civ.techs[a] = any;
+        }
+        civ.research = Advance::None;
+        civ.bulbs = 0;
+    }
     // The Great Library: an advance two other civilizations know.
     if (wonder_active(ci, Wonder::GreatLibrary)) {
         for (int a = 0; a < kAdvanceCount; ++a) {
             if (civ.techs[a] || a == static_cast<int>(Advance::FutureTech)) continue;
             int knowers = 0;
             for (int k = 0; k < static_cast<int>(civs.size()); ++k) {
-                if (k != ci && civs[k].alive && civs[k].techs[a]) ++knowers;
+                if (k != ci && civs[k].alive && !civs[k].barbarian && civs[k].techs[a]) ++knowers;
             }
             if (knowers >= 2) {
                 learn(ci, static_cast<Advance>(a));
@@ -2027,7 +2398,7 @@ void Game::start_turn_for(int ci)
         }
     }
     // Research.
-    if (civ.research == Advance::None && civ.ai) choose_research_ai(ci);
+    if (civ.research == Advance::None && civ.ai && !civ.barbarian) choose_research_ai(ci);
     while (civ.research != Advance::None && civ.bulbs >= research_cost(ci)) {
         civ.bulbs -= research_cost(ci);
         const Advance a = civ.research;
@@ -2056,7 +2427,8 @@ void Game::start_turn_for(int ci)
             }
         }
         if (u->order == Order::Fortifying) u->order = Order::Fortified;
-        if (u->order == Order::Road || u->order == Order::Irrigate || u->order == Order::Mine || u->order == Order::Fortress) {
+        if (u->order == Order::Road || u->order == Order::Irrigate || u->order == Order::Mine || u->order == Order::Fortress ||
+            u->order == Order::Railroad || u->order == Order::Clean) {
             u->moves = 0;
             Tile &t = map.at(u->x, u->y);
             const TerrainInfo &ti = terrain_info(t.terrain);
@@ -2066,6 +2438,8 @@ void Game::start_turn_for(int ci)
             case Order::Road: need = ti.road_turns; break;
             case Order::Irrigate: need = ti.irrigate_turns; break;
             case Order::Mine: need = ti.mine_turns; break;
+            case Order::Railroad: need = ti.road_turns * 2; break;
+            case Order::Clean: need = 3; break;
             default: need = ti.fortress_turns; break;
             }
             // Settlers working the same job on the square help each other.
@@ -2094,6 +2468,8 @@ void Game::start_turn_for(int ci)
                         t.irrigation = false;
                     }
                     break;
+                case Order::Railroad: t.railroad = true; break;
+                case Order::Clean: t.pollution = false; break;
                 default: t.fortress = true; break;
                 }
                 for (Unit &o : units) {
@@ -2124,6 +2500,15 @@ void Game::new_turn()
 {
     ++turn;
     for (int c = 0; c < static_cast<int>(civs.size()); ++c) start_turn_for(c);
+    spawn_barbarians();
+    // Global warming builds up while squares stay polluted.
+    const int polluted = polluted_squares();
+    if (polluted > 0) {
+        warming += polluted;
+    } else {
+        warming = std::max(0, warming - 10);
+    }
+    if (warming >= kWarmingThreshold) global_warming();
     check_elimination();
     refresh_visibility();
 }
@@ -2131,7 +2516,9 @@ void Game::new_turn()
 void Game::end_turn()
 {
     for (int c = 0; c < static_cast<int>(civs.size()); ++c) {
-        if (civs[c].alive && civs[c].ai) ai_play(c);
+        if (!civs[c].alive || !civs[c].ai) continue;
+        if (civs[c].barbarian) ai_barbarians(c);
+        else ai_play(c);
     }
     new_turn();
     if (!civs[human].ai) begin_human_phase();

@@ -35,6 +35,8 @@ char status_letter(const Unit &u)
     case Order::Irrigate: return 'I';
     case Order::Mine: return 'M';
     case Order::Fortress: return 'P';
+    case Order::Railroad: return 'R';
+    case Order::Clean: return 'P';
     default: return 0;
     }
 }
@@ -154,7 +156,7 @@ void App::refresh_terrain()
         for (int x = 0; x < now.w; ++x) {
             const art::PaintTile &a = now.at(x, y), &b = painted_.at(x, y);
             if (a.terrain != b.terrain || a.special != b.special || a.river != b.river || a.road != b.road ||
-                a.irrigated != b.irrigated || a.mine != b.mine || a.hut != b.hut || a.city != b.city) {
+                a.rail != b.rail || a.pollution != b.pollution || a.irrigated != b.irrigated || a.mine != b.mine || a.hut != b.hut || a.city != b.city) {
                 changed.push_back({x, y});
             }
         }
@@ -249,10 +251,16 @@ void App::end_turn()
 {
     if (!game_ || g().winner >= 0 || g().human_dead) return;
     goto_mode_ = false;
+    const size_t first = g().messages.size();
     g().end_turn();
     refresh_terrain();
     collect_news(true);
     begin_turn();
+    // Raiders at the gates: show where they are rather than the next unit.
+    for (size_t i = first; i < g().messages.size(); ++i) {
+        const Message &m = g().messages[i];
+        if (m.civ == human() && m.kind == MsgKind::Bad && m.x >= 0 && m.text.find("Barbarian") != std::string::npos) center_on(m.x, m.y);
+    }
 }
 
 void App::collect_news(bool report)
@@ -438,8 +446,10 @@ void App::do_order(char order)
     case 'r':
     case 'i':
     case 'm': {
-        const Order job = order == 'r' ? Order::Road : (order == 'i' ? Order::Irrigate : Order::Mine);
+        Order job = order == 'r' ? Order::Road : (order == 'i' ? Order::Irrigate : Order::Mine);
         if (!settlers) return;
+        // On an existing road, R lays railroad once Railroad is known.
+        if (job == Order::Road && g().can_work(*u, Order::Railroad)) job = Order::Railroad;
         if (!g().start_work(active_, job)) {
             news_ = order == 'r' ? "No road can be built here." : (order == 'i' ? "No water nearby to irrigate from." : "Nothing to mine here.");
             return;
@@ -448,6 +458,11 @@ void App::do_order(char order)
         return;
     }
     case 'p':
+        // P cleans up pollution first, as in the original's key map.
+        if (settlers && g().can_work(*u, Order::Clean) && g().start_work(active_, Order::Clean)) {
+            unit_moved();
+            return;
+        }
         if (settlers && g().start_work(active_, Order::Fortress)) unit_moved();
         return;
     case 'f':
@@ -956,10 +971,16 @@ std::vector<App::MenuItem> App::menu_items(int menu)
         break;
     case 1:
         items.push_back({"Found City / Join City", "B", [this] { do_order('b'); }, settlers});
-        items.push_back({"Build Road", "R", [this] { do_order('r'); }, settlers});
+        if (settlers && g().can_work(*u, Order::Railroad))
+            items.push_back({"Build Railroad", "R", [this] { do_order('r'); }, true});
+        else
+            items.push_back({"Build Road", "R", [this] { do_order('r'); }, settlers});
         items.push_back({"Irrigate", "I", [this] { do_order('i'); }, settlers});
         items.push_back({"Build Mine", "M", [this] { do_order('m'); }, settlers});
-        items.push_back({"Build Fortress", "P", [this] { do_order('p'); }, settlers && g().can_work(*u, Order::Fortress)});
+        if (settlers && g().can_work(*u, Order::Clean))
+            items.push_back({"Clean Up Pollution", "P", [this] { do_order('p'); }, true});
+        else
+            items.push_back({"Build Fortress", "P", [this] { do_order('p'); }, settlers && g().can_work(*u, Order::Fortress)});
         items.push_back({"Fortify", "F", [this] { do_order('f'); }, u && !settlers});
         items.push_back({"Sentry", "S", [this] { do_order('s'); }, u != nullptr});
         items.push_back({"Go To...", "G", [this] { do_order('g'); }, u != nullptr});
@@ -1024,7 +1045,7 @@ void App::draw_title(cairo_t *cr)
     // A quiet backdrop for the New Game dialog: the title and two rows of
     // unit counters along the foot of the screen.
     text_center(cr, "Sans Bold 30", "LUNDUKE CIV", geo_.win_w / 2.0, 44, kSlateGold);
-    const int n = kUnitTypeCount, per_row = 14;
+    const int n = static_cast<int>(UnitType::Leader), per_row = 14;   // the 28 buildable units
     const double gap = (geo_.win_w - 40.0) / per_row;
     for (int i = 0; i < n; ++i) {
         const Pixmap card = art::unit_card(static_cast<UnitType>(i), civ_colors(i % 8));
@@ -1133,7 +1154,7 @@ void App::draw_band(cairo_t *cr)
             open(d);
         };
     };
-    const std::vector<Item> items = {
+    std::vector<Item> items = {
         {"CIVILIZATION", c.name, kSlateInk, dlg(DialogKind::Foreign, "Foreign Affairs")},
         {"YEAR", year_text(year_for_turn(g().turn)), kSlateInk, nullptr},
         {"TREASURY", with_commas(c.gold) + " gold", kSlateGold, dlg(DialogKind::Rates, "Tax Rates")},
@@ -1144,6 +1165,11 @@ void App::draw_band(cairo_t *cr)
          dlg(DialogKind::Revolution, "Revolution")},
         {"RESEARCH", research, c.research == Advance::None ? kSlateGold : kSlateInk, dlg(DialogKind::Science, "Science Advisor")},
     };
+    if (const int dirty = g().polluted_squares()) {
+        // Pollution on the map: how much, and how close global warming is.
+        items.push_back({"POLLUTION", std::to_string(dirty) + " sq \u00b7 warming " + std::to_string(g().warming_risk()) + "%",
+                         g().warming_risk() >= 50 ? kSlateBad : kSlateGold, nullptr});
+    }
     double x = 12;
     for (const Item &it : items) {
         const double lw = measure(cr, kTagFont, it.label).w;
@@ -1378,7 +1404,9 @@ void App::draw_sidebar(cairo_t *cr)
         const Tile &t = m.at(u->x, u->y);
         std::string where = terrain_info(t.terrain).name;
         if (t.special) where = terrain_info(t.terrain).special;
-        if (t.road) where += ", Road";
+        if (t.railroad) where += ", Railroad";
+        else if (t.road) where += ", Road";
+        if (t.pollution) where += ", Pollution";
         if (t.irrigation) where += ", Irr.";
         if (t.mine) where += ", Mine";
         text(cr, kUiFont, where, tx, y + 54, kSlateDim);
@@ -1423,14 +1451,19 @@ void App::draw_sidebar(cairo_t *cr)
         icons.push_back(art::sprite(done_rows()));
     }
     const bool settlers = u && (unit_info(u->type).flags & kSettlers);
-    const char keys[8] = {'b', 'r', 'i', 'm', 'f', 's', 'w', ' '};
+    char keys[8] = {'b', 'r', 'i', 'm', 'f', 's', 'w', ' '};
     const char *labels[8] = {"B", "R", "I", "M", "F", "S", "W", "\u2423"};
+    const bool cleanup = settlers && g().can_work(*u, Order::Clean);
+    if (cleanup) {
+        keys[4] = 'p';   // the fortify slot cleans up pollution under Settlers
+        labels[4] = "P";
+    }
     bool enabled[8];
     enabled[0] = settlers;
-    enabled[1] = settlers && g().can_work(*u, Order::Road);
+    enabled[1] = settlers && (g().can_work(*u, Order::Road) || g().can_work(*u, Order::Railroad));
     enabled[2] = settlers && g().can_work(*u, Order::Irrigate);
     enabled[3] = settlers && g().can_work(*u, Order::Mine);
-    enabled[4] = u && (!settlers || g().can_work(*u, Order::Fortress));
+    enabled[4] = u && (!settlers || cleanup || g().can_work(*u, Order::Fortress));
     enabled[5] = enabled[6] = enabled[7] = u != nullptr;
     const double cell = 60, bs = 54;
     for (int i = 0; i < 8; ++i) {
@@ -1486,7 +1519,7 @@ void App::draw_status(cairo_t *cr)
     if (goto_mode_) {
         tool = "Go To: click a square  [Esc]";
     } else if (const Unit *u = g().unit(active_)) {
-        tool = std::string(unit_info(u->type).name) + ((unit_info(u->type).flags & kSettlers) ? ": B R I M" : ": F S W G");
+        tool = std::string(unit_info(u->type).name) + ((unit_info(u->type).flags & kSettlers) ? (g().can_work(*u, Order::Clean) ? ": B R I M P" : ": B R I M") : ": F S W G");
     }
     const Metrics tm = measure(cr, kBoldFont, tool);
     double right = geo_.win_w - 10 - tm.w;

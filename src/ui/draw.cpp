@@ -226,7 +226,9 @@ const art::CivColors &civ_colors(int index)
         {rgb(0x8A4AC0), rgb(0xC8A0F0), rgb(0x4A2270)}, // purple
         {rgb(0xE07A2A), rgb(0xF8B880), rgb(0x8A4210)}, // orange
         {rgb(0xCFCAC0), rgb(0xFFFFFF), rgb(0x76706A)}, // white
+        {rgb(0x4A4244), rgb(0x9A8E88), rgb(0x1E1618)}, // barbarians: soot and iron
     };
+    if (index == 8) return colors[8];
     return colors[((index % 8) + 8) % 8];
 }
 

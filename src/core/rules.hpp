@@ -78,6 +78,7 @@ enum UnitFlag : unsigned {
     kCarriesAir = 1u << 6,
     kNonMilitary = 1u << 7,
     kNuclear = 1u << 8,
+    kNoBuild = 1u << 9,   // never built in a city (the barbarian Leader)
 };
 
 enum class UnitType : std::uint8_t {
@@ -85,6 +86,7 @@ enum class UnitType : std::uint8_t {
     Artillery, Armor, MechInf, Diplomat, Caravan,
     Trireme, Sail, Frigate, Ironclad, Transport, Cruiser, Battleship, Carrier, Submarine,
     Fighter, Bomber, Nuclear,
+    Leader,     // a barbarian chieftain: never built, ransomed when caught alone
     Count,
 };
 constexpr int kUnitTypeCount = static_cast<int>(UnitType::Count);

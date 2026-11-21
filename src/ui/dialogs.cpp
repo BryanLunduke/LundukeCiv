@@ -939,11 +939,13 @@ void App::draw_cities(cairo_t *cr, Dialog &d)
 void App::draw_foreign(cairo_t *cr, Dialog &d)
 {
     const int me = human();
-    const double w = 760, h = 160 + (g().civs.size() - 1) * 64.0, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    int rivals = 0;
+    for (const Civ &c : g().civs) rivals += !c.barbarian;
+    const double w = 760, h = 160 + (rivals - 1) * 64.0, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
     double cy = dialog_frame(cr, x, y, w, h, d.title);
     const double L = x + 24, R = x + w - 24;
     for (int k = 0; k < static_cast<int>(g().civs.size()); ++k) {
-        if (k == me) continue;
+        if (k == me || g().civs[k].barbarian) continue;   // raiders keep no embassies
         const Civ &c = g().civs[k];
         const bool met = (g().civs[me].contact >> k) & 1u;
         round_rect(cr, L, cy, R - L, 56, 6);
@@ -1007,6 +1009,7 @@ void App::draw_unit_sheet(cairo_t *cr, Dialog &d)
     const double cw = (w - 32) / cols, ch = (h - 54 - 70) / 4;
     const int color = game_ ? g().civs[human()].color : settings.player_color;
     for (int u = 0; u < kUnitTypeCount; ++u) {
+        if (unit_info(u).flags & kNoBuild) continue;
         const double cx = x + 16 + (u % cols) * cw, ccy = cy + (u / cols) * ch;
         const UnitInfo &ui = unit_info(u);
         paint_pixmap(cr, art::unit_card(static_cast<UnitType>(u), civ_colors(color)), cx + (cw - 64) / 2, ccy, 2);
@@ -1076,7 +1079,7 @@ void App::draw_help(cairo_t *cr, Dialog &d)
     const std::pair<const char *, const char *> rows[] = {
         {"Arrows, keypad", "Move the active unit (keypad 7 9 1 3 for diagonals)"},
         {"B", "Found a city (or join one)"},
-        {"R  I  M  P", "Settlers: road, irrigate, mine, fortress"},
+        {"R  I  M  P", "Settlers: road/railroad, irrigate, mine, fortress/clean up"},
         {"F  S", "Fortify, sentry"},
         {"G", "Go to a square (then click it)"},
         {"W  Space  N", "Wait, skip this turn, next unit"},

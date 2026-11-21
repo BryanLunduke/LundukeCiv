@@ -128,6 +128,7 @@ const UnitInfo kUnits[kUnitTypeCount] = {
     {"Fighter", D::Air, 4, 2, 10, 60, A::Flight, A::None, 0, 0, 1},
     {"Bomber", D::Air, 12, 1, 8, 120, A::AdvancedFlight, A::None, kIgnoreWalls | kSight2, 0, 2},
     {"Nuclear", D::Air, 99, 0, 16, 160, A::Rocketry, A::None, kNuclear | kIgnoreZoc, 0, 1},
+    {"Barbarian Leader", D::Land, 0, 0, 1, 10, A::None, A::None, kNonMilitary | kNoBuild | kIgnoreZoc, 0, 0},
 };
 
 const BuildingInfo kBuildings[kBuildingCount] = {

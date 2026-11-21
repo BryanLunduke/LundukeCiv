@@ -66,6 +66,21 @@ void Game::choose_research_ai(int ci)
 void Game::ai_city(City &c)
 {
     const int ci = c.owner;
+    if (civs[ci].barbarian) {
+        // Raiders build raiders.
+        int best = -1, score = -1;
+        for (int u = 0; u < kUnitTypeCount; ++u) {
+            if (!can_build(c, true, u) || unit_info(u).domain != Domain::Land || !is_military(static_cast<UnitType>(u))) continue;
+            const int sc = unit_info(u).attack * 4 + unit_info(u).moves;
+            if (sc > score) {
+                score = sc;
+                best = u;
+            }
+        }
+        c.build_unit = true;
+        c.build = best >= 0 ? best : static_cast<int>(UnitType::Militia);
+        return;
+    }
     auto best_unit = [&](bool attack_role) {
         int best = -1, score = -1;
         for (int u = 0; u < kUnitTypeCount; ++u) {
@@ -172,7 +187,7 @@ void Game::ai_city(City &c)
         }
         bool embassy_wanted = false;
         for (const City &o : cities) {
-            if (o.owner != ci && map.at(o.x, o.y).continent == cont && ((map.at(o.x, o.y).explored >> ci) & 1u) &&
+            if (o.owner != ci && !civs[o.owner].barbarian && map.at(o.x, o.y).continent == cont && ((map.at(o.x, o.y).explored >> ci) & 1u) &&
                 (!((civs[ci].embassy >> o.owner) & 1u) || (at_war(ci, o.owner) && !((o.stolen >> ci) & 1u))))
                 embassy_wanted = true;
         }
@@ -263,7 +278,7 @@ void Game::ai_diplomacy(int ci)
     };
     const int mine = strength(ci);
     for (int k = 0; k < static_cast<int>(civs.size()); ++k) {
-        if (k == ci || !civs[k].alive || !((me.contact >> k) & 1u)) continue;
+        if (k == ci || !civs[k].alive || civs[k].barbarian || !((me.contact >> k) & 1u)) continue;
         if (at_war(ci, k)) {
             // Tired of a war that goes nowhere; the Great Wall and the
             // United Nations bring offers of peace much sooner.
@@ -474,6 +489,7 @@ void Game::ai_envoy(Unit &start)
         if (map.at(c.x, c.y).continent != cont) continue;
         const int d = map.distance(start.x, start.y, c.x, c.y);
         int score = d;
+        if (civs[c.owner].barbarian) continue;
         if (diplomat) {
             if (c.owner == ci || !((map.at(c.x, c.y).explored >> ci) & 1u)) continue;
             const bool embassy = (civs[ci].embassy >> c.owner) & 1u;
@@ -628,7 +644,7 @@ void Game::ai_unit(Unit &start)
         }
         // March on the nearest enemy city we know of.
         int tx = -1, ty = -1, td = 1 << 30;
-        if (civs[ci].war && info.attack >= info.defense) {
+        if (info.attack >= info.defense) {
             const int cont = map.at(u->x, u->y).continent;
             for (const City &c : cities) {
                 if (!at_war(ci, c.owner)) continue;
@@ -772,12 +788,29 @@ void Game::ai_play(int ci)
     for (City &ct : cities) {
         if (ct.owner == ci && (!can_build(ct, ct.build_unit, ct.build) || ct.founded == turn || ct.shields == 0)) ai_city(ct);
     }
-    // Rush a defender into an empty city on the front.
+    // Rush a defender into a weakly held city with enemies (or raiders) close.
     for (City &ct : cities) {
-        if (ct.owner != ci || !c.war) continue;
-        bool guarded = false;
-        for (const Unit &u : units) guarded |= u.owner == ci && u.x == ct.x && u.y == ct.y && is_military(u.type);
-        if (!guarded && ct.build_unit && unit_info(ct.build).defense > 0 && buy_cost(ct) <= c.gold / 2) buy(ct.id);
+        if (ct.owner != ci) continue;
+        int guards = 0;
+        bool threat = false;
+        for (const Unit &u : units) {
+            guards += u.owner == ci && u.x == ct.x && u.y == ct.y && is_military(u.type);
+            threat |= at_war(ci, u.owner) && is_military(u.type) && map.distance(u.x, u.y, ct.x, ct.y) <= 3;
+        }
+        if (!threat || guards >= 2) continue;
+        if (!ct.build_unit || unit_info(ct.build).defense < 2) {
+            int best = -1;
+            for (int u = 0; u < kUnitTypeCount; ++u) {
+                if (can_build(ct, true, u) && unit_info(u).domain == Domain::Land && is_military(static_cast<UnitType>(u)) &&
+                    (best < 0 || unit_info(u).defense > unit_info(best).defense))
+                    best = u;
+            }
+            if (best >= 0 && (ct.build_unit || ct.shields < 10)) {
+                ct.build_unit = true;
+                ct.build = best;
+            }
+        }
+        if (ct.build_unit && unit_info(ct.build).defense > 0 && buy_cost(ct) <= c.gold) buy(ct.id);
     }
     // Spend a fat treasury: rush the cheapest job that is half done.
     for (int guard = 0; guard < 4 && c.gold > 120; ++guard) {

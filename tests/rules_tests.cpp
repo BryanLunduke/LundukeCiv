@@ -195,7 +195,7 @@ static void test_tech_prereqs()
 
 static void test_units_table()
 {
-    CHECK_EQ(kUnitTypeCount, 28);
+    CHECK_EQ(kUnitTypeCount, 29);   // 28 from the DOS game plus the barbarian Leader
     struct Row {
         UnitType t;
         int a, d, m, cost;
@@ -750,6 +750,114 @@ static void test_envoys()
     CHECK_EQ(h.city(east)->shields, sh + 50);
 }
 
+static void test_rail_pollution()
+{
+    // Railroads: free movement between railroad squares, +50% shields.
+    Game g = flat_game();
+    const int m = place(g, 0, UnitType::Militia, 10, 10);
+    for (int x = 10; x <= 14; ++x) {
+        g.map.at(x, 10).road = true;
+        g.map.at(x, 10).railroad = true;
+    }
+    for (int k = 0; k < 4; ++k) CHECK(g.move(m, 1, 0) == MoveResult::Moved);
+    CHECK_EQ(g.unit(m)->x, 14);
+    CHECK_EQ(g.unit(m)->moves, 3);   // not a third spent
+    g.map.at(20, 20).terrain = Terrain::Forest;
+    CHECK_EQ(g.tile_yield(20, 20, 0, false).shields, 2);
+    g.map.at(20, 20).road = g.map.at(20, 20).railroad = true;
+    CHECK_EQ(g.tile_yield(20, 20, 0, false).shields, 3);
+    // Settlers lay railroad only on a road, once Railroad is known.
+    const int s = place(g, 0, UnitType::Settlers, 30, 30);
+    CHECK(!g.can_work(*g.unit(s), Order::Railroad));
+    g.map.at(30, 30).road = true;
+    CHECK(!g.can_work(*g.unit(s), Order::Railroad));
+    g.learn(0, Advance::Railroad);
+    CHECK(g.can_work(*g.unit(s), Order::Railroad));
+
+    // Pollution halves a square's output until settlers clean it up.
+    Game p = flat_game();
+    CHECK_EQ(p.tile_yield(20, 20, 0, false).food, 2);
+    p.map.at(20, 20).pollution = true;
+    CHECK_EQ(p.tile_yield(20, 20, 0, false).food, 1);
+    CHECK_EQ(p.polluted_squares(), 1);
+    const int c = place(p, 0, UnitType::Settlers, 20, 20);
+    CHECK(p.can_work(*p.unit(c), Order::Clean));
+    CHECK(p.start_work(c, Order::Clean));
+    for (int t = 0; t < 6 && p.map.at(20, 20).pollution; ++t) p.end_turn();
+    CHECK(!p.map.at(20, 20).pollution);
+
+    // Global warming once enough pollution has built up.
+    Game w = flat_game();
+    for (int x = 20; x < 30; ++x) w.map.at(x, 20).pollution = true;
+    w.warming = Game::kWarmingThreshold - 1;
+    CHECK(w.warming_risk() >= 99);
+    w.end_turn();
+    CHECK_EQ(w.warming_events, 1);
+    CHECK_EQ(w.warming, 0);
+    bool said = false;
+    for (const Message &msg : w.messages) said |= msg.text.find("Global warming") != std::string::npos;
+    CHECK(said);
+    // Saved and loaded.
+    w.map.at(40, 40).railroad = w.map.at(40, 40).road = true;
+    Game back;
+    CHECK(load_game(save_game(w), back));
+    CHECK_EQ(back.warming_events, 1);
+    CHECK(back.map.at(40, 40).railroad);
+    CHECK(back.map.at(20, 20).pollution);
+}
+
+static void test_barbarians()
+{
+    Game g = flat_game();
+    const int bc = g.barbarian_civ();
+    CHECK(bc >= 0);
+    if (bc < 0) return;
+    CHECK(g.at_war(0, bc));
+    CHECK(g.at_war(bc, 1));
+    CHECK(!g.at_war(0, 1));
+    const int s0 = place(g, 0, UnitType::Settlers, 1, 20);   // coastal (ocean in column 0)
+    CHECK(g.found_city(s0, "Shore"));
+    // A landing from the sea, and an uprising inland, each with a leader.
+    g.spawn_barbarians(true, false);
+    int ships = 0, raiders = 0, leaders = 0;
+    for (const Unit &u : g.units) {
+        if (u.owner != bc) continue;
+        if (u.type == UnitType::Leader) ++leaders;
+        else if (unit_info(u.type).domain == Domain::Sea) ++ships;
+        else ++raiders;
+    }
+    CHECK(ships >= 1);
+    CHECK(raiders >= 2);
+    CHECK_EQ(leaders, 1);
+    g.spawn_barbarians(false, true);
+    leaders = 0;
+    for (const Unit &u : g.units) leaders += u.owner == bc && u.type == UnitType::Leader;
+    CHECK_EQ(leaders, 2);
+    // Barbarians make no peace and never count for victory.
+    g.make_peace(0, bc);
+    CHECK(g.at_war(0, bc));
+
+    // Ransom: walk onto a lone leader for 100 gold.
+    Game r = flat_game();
+    const int rb = r.barbarian_civ();
+    const int lead = place(r, rb, UnitType::Leader, 11, 10);
+    const int hero = place(r, 0, UnitType::Cavalry, 10, 10);
+    const int gold = r.civs[0].gold;
+    r.move(hero, 1, 0);
+    CHECK(r.unit(lead) == nullptr);
+    CHECK_EQ(r.civs[0].gold, gold + 100);
+    // With an army around him, the army fights; he is not ransomed.
+    Game a = flat_game();
+    const int ab = a.barbarian_civ();
+    const int l2 = place(a, ab, UnitType::Leader, 11, 10);
+    place(a, ab, UnitType::Legion, 11, 10);
+    const int h2 = place(a, 0, UnitType::Cavalry, 10, 10);
+    const int g2 = a.civs[0].gold;
+    a.move(h2, 1, 0);
+    CHECK_EQ(a.civs[0].gold, g2);
+    CHECK(a.unit(l2) != nullptr);   // kill_stack spares leaders
+}
+
 int main(int argc, char **argv)
 {
     const std::map<std::string, std::function<void()>> tests = {
@@ -757,6 +865,7 @@ int main(int argc, char **argv)
         {"units_table", test_units_table}, {"combat_odds", test_combat_odds},       {"city_growth", test_city_growth},
         {"settlers_work", test_settlers_work}, {"movement", test_movement},          {"save_roundtrip", test_save_roundtrip},
         {"ai_smoke", test_ai_smoke},           {"wonders", test_wonders}, {"envoys", test_envoys},
+        {"rail_pollution", test_rail_pollution}, {"barbarians", test_barbarians},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();

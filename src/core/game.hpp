@@ -23,7 +23,7 @@ namespace civ {
 constexpr int kMaxCivs = 8;
 constexpr int kUnitHp = 10;   // hit points of a healthy unit; each lost combat round costs one
 
-enum class Order : std::uint8_t { None, Fortifying, Fortified, Sentry, Goto, Road, Irrigate, Mine, Fortress };
+enum class Order : std::uint8_t { None, Fortifying, Fortified, Sentry, Goto, Road, Irrigate, Mine, Fortress, Railroad, Clean };
 
 struct Unit {
     int id = 0;
@@ -59,6 +59,7 @@ struct CityStats {
     int unhappy = 0;
     int food_box = 0;
     bool disorder = false;
+    int pollution = 0;      // percent chance a turn of polluting a square
     int base_trade = 0;     // trade from the land, before trade routes
     int route_trade = 0;    // added by trade routes
 };
@@ -110,6 +111,7 @@ struct Civ {
     std::uint8_t war = 0;       // bit per civ
     std::uint8_t contact = 0;   // bit per civ
     std::uint8_t embassy = 0;   // bit per civ we have an embassy with
+    bool barbarian = false;     // the raiders: always at war, never a rival for victory
 };
 
 enum class MsgKind : std::uint8_t { Info, Good, Bad, Combat, Tech, City, Wonder };
@@ -206,6 +208,8 @@ public:
     // -2 lost with its city.
     std::array<int, kWonderCount> wonder_city{};
     std::array<std::uint32_t, kMaxCivs> wonder_started{};  // announced "is building" bits
+    int warming = 0;           // global warming builds up while squares are polluted
+    int warming_events = 0;
 
     Game() { wonder_city.fill(-1); }
 
@@ -278,7 +282,10 @@ public:
     bool step_goto(int unit_id);          // one move toward the goto target
     void declare_war(int a, int b);
     void make_peace(int a, int b);
-    bool at_war(int a, int b) const { return a != b && ((civs[a].war >> b) & 1u); }
+    bool at_war(int a, int b) const
+    {
+        return a != b && (civs[a].barbarian || civs[b].barbarian || ((civs[a].war >> b) & 1u));
+    }
     void set_rates(int civ, int tax, int lux, int sci);
     void revolution(int civ, Government g);
     bool buy(int city_id);
@@ -298,6 +305,18 @@ public:
     int trade_bonus(const Unit &u, const City &c) const;     // one-time gold and bulbs
     bool caravan_help(int unit_id, int city_id);
     int caravan_trade(int unit_id, int city_id);              // returns the bonus, -1 on failure
+
+    // --- barbarians
+    int barbarian_civ() const;                      // index, -1 none
+    bool is_barbarian(int civ) const { return civ >= 0 && civ < static_cast<int>(civs.size()) && civs[civ].barbarian; }
+    void spawn_barbarians(bool force_sea = false, bool force_land = false);
+    int ransom(int unit_id, int tx, int ty);        // capture lone barbarian leaders: gold won
+
+    // --- pollution
+    int polluted_squares() const;
+    int pollution_chance(const City &c) const;     // percent per turn
+    int warming_risk() const;                       // percent: how close the next warming is
+    static constexpr int kWarmingThreshold = 600;
 
     // --- turn
     void begin_human_phase();             // goto orders, sentries waking
@@ -336,6 +355,11 @@ private:
     void ai_diplomacy(int civ);
     bool ai_settler(Unit &u);
     void ai_envoy(Unit &u);    // Diplomats and Caravans
+    void pollute(City &c);
+    void ai_barbarians(int civ);
+    bool barbarian_landing(int bc, UnitType ship, const std::vector<UnitType> &army);
+    bool barbarian_uprising(int bc, const std::vector<UnitType> &army);
+    void global_warming();
 };
 
 // Save and load as plain text. Version line first.

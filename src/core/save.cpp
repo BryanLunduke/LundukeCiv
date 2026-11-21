@@ -50,7 +50,7 @@ long long num(const std::vector<std::string> &f, size_t i)
 unsigned tile_word(const Tile &t)
 {
     return static_cast<unsigned>(t.terrain) | (t.special << 4) | (t.hut << 5) | (t.road << 6) | (t.irrigation << 7) |
-           (t.mine << 8) | (t.fortress << 9) | (static_cast<unsigned>(t.explored) << 10);
+           (t.mine << 8) | (t.fortress << 9) | (static_cast<unsigned>(t.explored) << 10) | (t.railroad << 18) | (t.pollution << 19);
 }
 
 } // namespace
@@ -79,7 +79,7 @@ std::string save_game(const Game &g)
           << c.gold << "|" << c.tax << "|" << c.lux << "|" << c.sci << "|" << static_cast<int>(c.govt) << "|"
           << static_cast<int>(c.target) << "|" << c.anarchy << "|" << techs << "|" << static_cast<int>(c.research) << "|"
           << c.bulbs << "|" << c.future << "|" << c.name_next << "|" << static_cast<int>(c.war) << "|"
-          << static_cast<int>(c.contact) << "|" << static_cast<int>(c.embassy) << "\n";
+          << static_cast<int>(c.contact) << "|" << static_cast<int>(c.embassy) << "|" << (c.barbarian ? 1 : 0) << "\n";
     }
     for (const City &c : g.cities) {
         std::string worked;
@@ -101,6 +101,7 @@ std::string save_game(const Game &g)
     o << "wstart";
     for (std::uint32_t b : g.wonder_started) o << "|" << b;
     o << "\n";
+    o << "climate|" << g.warming << "|" << g.warming_events << "\n";
     o << "end\n";
     return o.str();
 }
@@ -149,6 +150,8 @@ bool load_game(const std::string &text, Game &out, std::string *error)
                     t.mine = (v >> 8) & 1u;
                     t.fortress = (v >> 9) & 1u;
                     t.explored = static_cast<std::uint8_t>((v >> 10) & 0xFFu);
+                    t.railroad = (v >> 18) & 1u;
+                    t.pollution = (v >> 19) & 1u;
                 }
             }
             g.map.label_continents();
@@ -175,6 +178,7 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             c.war = static_cast<std::uint8_t>(num(f, 18));
             c.contact = static_cast<std::uint8_t>(num(f, 19));
             c.embassy = static_cast<std::uint8_t>(num(f, 20));
+            c.barbarian = num(f, 21) != 0;
             g.civs.push_back(c);
         } else if (k == "city") {
             City c;
@@ -232,6 +236,9 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             g.units.push_back(u);
         } else if (k == "wonders") {
             for (int w = 0; w < kWonderCount && w + 1 < static_cast<int>(f.size()); ++w) g.wonder_city[w] = static_cast<int>(num(f, w + 1));
+        } else if (k == "climate") {
+            g.warming = static_cast<int>(num(f, 1));
+            g.warming_events = static_cast<int>(num(f, 2));
         } else if (k == "wstart") {
             for (int c = 0; c < kMaxCivs && c + 1 < static_cast<int>(f.size()); ++c) g.wonder_started[c] = static_cast<std::uint32_t>(num(f, c + 1));
         } else if (k == "end") {
@@ -246,6 +253,16 @@ bool load_game(const std::string &text, Game &out, std::string *error)
     }
     for (const Unit &u : g.units) {
         if (u.owner < 0 || u.owner >= static_cast<int>(g.civs.size())) return fail("Unit with a bad owner.");
+    }
+    // Saves from before barbarians: add them.
+    if (g.barbarian_civ() < 0 && static_cast<int>(g.civs.size()) < kMaxCivs) {
+        Civ b;
+        b.name = "Barbarians";
+        b.leader = "Chieftain";
+        b.color = 8;
+        b.barbarian = true;
+        b.gold = 0;
+        g.civs.push_back(b);
     }
     for (City &c : g.cities) g.update_city(c);
     g.refresh_visibility();
