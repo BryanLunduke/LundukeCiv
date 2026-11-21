@@ -13,6 +13,7 @@
 #include "rules.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -220,7 +221,10 @@ public:
     bool tile_free_for(const City &c, int x, int y) const;
     void update_city(City &c);            // recompute stats (and arrange workers unless manual)
     void arrange_workers(City &c);
-    int food_box(const City &c) const { return (c.size + 1) * 10; }
+    // Computer rulers get Civ-style handicaps: cheaper growth and builds on
+    // harder levels, dearer on Chieftain (percent, 100 for humans).
+    int ai_cost_percent(int civ) const;
+    int food_box(const City &c) const { return std::max(4, (c.size + 1) * ai_cost_percent(c.owner) / 10); }
     int size_cap(const City &c) const { return c.has(Building::Aqueduct) ? 99 : 10; }
     int buy_cost(const City &c) const;
     int production_cost(const City &c) const;

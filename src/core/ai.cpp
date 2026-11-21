@@ -17,13 +17,14 @@ namespace civ {
 namespace {
 
 const Advance kResearchOrder[] = {
-    Advance::BronzeWorking, Advance::Alphabet,       Advance::CeremonialBurial, Advance::CodeOfLaws,
-    Advance::Monarchy,      Advance::Pottery,        Advance::Masonry,          Advance::Writing,
-    Advance::Currency,      Advance::HorsebackRiding, Advance::IronWorking,     Advance::TheWheel,
-    Advance::Mathematics,   Advance::Mysticism,      Advance::Literacy,         Advance::Philosophy,
-    Advance::Trade,         Advance::Construction,   Advance::Banking,          Advance::Feudalism,
-    Advance::University,    Advance::Astronomy,      Advance::Religion,         Advance::Invention,
-    Advance::Gunpowder,     Advance::BridgeBuilding,
+    Advance::Alphabet,      Advance::CeremonialBurial, Advance::BronzeWorking, Advance::CodeOfLaws,
+    Advance::Monarchy,      Advance::Pottery,          Advance::Writing,       Advance::Currency,
+    Advance::Masonry,       Advance::Mysticism,        Advance::Mathematics,   Advance::Literacy,
+    Advance::TheWheel,      Advance::IronWorking,      Advance::Trade,         Advance::Philosophy,
+    Advance::Construction,  Advance::HorsebackRiding,  Advance::Astronomy,     Advance::Republic,
+    Advance::Banking,       Advance::University,       Advance::Religion,      Advance::Feudalism,
+    Advance::BridgeBuilding, Advance::Invention,       Advance::Gunpowder,     Advance::Navigation,
+    Advance::Physics,       Advance::Medicine,         Advance::TheoryOfGravity, Advance::Chivalry,
 };
 
 bool is_military(UnitType t)
@@ -65,7 +66,6 @@ void Game::choose_research_ai(int ci)
 void Game::ai_city(City &c)
 {
     const int ci = c.owner;
-    bool war = civs[ci].war != 0;
     auto best_unit = [&](bool attack_role) {
         int best = -1, score = -1;
         for (int u = 0; u < kUnitTypeCount; ++u) {
@@ -84,54 +84,113 @@ void Game::ai_city(City &c)
     for (const Unit &u : units) {
         if (u.owner == ci && u.x == c.x && u.y == c.y && is_military(u.type) && unit_info(u.type).domain == Domain::Land) ++defenders;
     }
-    int own_cities = 0, own_settlers = 0, own_attackers = 0;
+    int own_cities = 0, own_settlers = 0, own_attackers = 0, own_military = 0, workers = 0;
     for (const City &o : cities) own_cities += o.owner == ci;
     for (const Unit &u : units) {
         if (u.owner != ci) continue;
-        if (unit_info(u.type).flags & kSettlers) ++own_settlers;
-        if (is_military(u.type) && u.order != Order::Fortified && u.order != Order::Fortifying) ++own_attackers;
+        if (unit_info(u.type).flags & kSettlers) {
+            ++own_settlers;
+            if (u.order == Order::Road || u.order == Order::Irrigate || u.order == Order::Mine) ++workers;
+        }
+        if (is_military(u.type)) {
+            ++own_military;
+            if (u.order != Order::Fortified && u.order != Order::Fortifying) ++own_attackers;
+        }
     }
     auto pick = [&](bool unit_kind, int what) {
         c.build_unit = unit_kind;
         c.build = what;
     };
-    const int need_def = (war || c.size >= 5) ? 2 : 1;
+    const CityStats &st = c.stats;
+    // A front: an enemy we are at war with has a city we know of on this
+    // landmass, or enemy troops are close.
+    bool front = false;     // the enemy is close to this city
+    bool war_here = false;  // an enemy city we know of shares our landmass
+    const int cont = map.at(c.x, c.y).continent;
+    for (const City &o : cities) {
+        if (!at_war(ci, o.owner) || map.at(o.x, o.y).continent != cont || !((map.at(o.x, o.y).explored >> ci) & 1u)) continue;
+        war_here = true;
+        if (map.distance(o.x, o.y, c.x, c.y) <= 8) front = true;
+    }
+    for (const Unit &e : units) {
+        if (at_war(ci, e.owner) && map.distance(e.x, e.y, c.x, c.y) <= 4) front = true;
+    }
+    // 1. A garrison: one defender in peace, two on a front or in a big city.
+    const int need_def = (front || c.size >= 7) ? 2 : 1;
     if (defenders < need_def) {
         pick(true, best_unit(false));
         return;
     }
-    const int city_target = 7 + static_cast<int>(difficulty) * 2;
-    if (own_cities + own_settlers < city_target && c.size >= 2 && own_settlers <= own_cities / 3 + 1 && c.stats.food_surplus >= 1) {
+    // 2. Expansion while there is room: young cities wait until size 2
+    // (the first few) or 3, and only a few settlers walk at once.
+    const int city_target = 8 + static_cast<int>(difficulty) * 2;
+    const int min_size = own_cities < 4 ? 2 : 3;
+    const int workers_wanted = own_cities >= 3 ? std::max(1, (own_cities + 1) / 3) : 0;
+    const int expanders = own_settlers - std::min(own_settlers, workers_wanted);
+    if (own_cities + expanders < city_target && c.size >= min_size && expanders <= own_cities / 3 + 1 &&
+        st.food_surplus >= 1 && !(front && own_attackers < own_cities / 2)) {
         pick(true, static_cast<int>(UnitType::Settlers));
         return;
     }
-    if (war && own_attackers < own_cities + 1 && rng.chance(0.6)) {
+    // 3. War on this landmass: some attackers.
+    if (war_here && own_attackers < own_cities / 2 + 1 && rng.chance(0.5)) {
         pick(true, best_unit(true));
         return;
     }
-    const Building wish[] = {
-        Building::Temple,     Building::Granary,    Building::Library,   Building::Marketplace, Building::CityWalls,
-        Building::Courthouse, Building::Aqueduct,   Building::Colosseum, Building::University,  Building::Bank,
-        Building::Cathedral,  Building::Barracks,   Building::Factory,   Building::PowerPlant,
+    // 4. Improvements, most useful first for this city.
+    const int corruption = st.corruption;
+    struct Want {
+        Building b;
+        bool ok;
     };
-    for (Building b : wish) {
-        if (!can_build(c, false, static_cast<int>(b))) continue;
-        if (b == Building::Temple && c.size < 2) continue;
-        if (b == Building::CityWalls && !war) continue;
-        if (b == Building::Aqueduct && c.size < 8) continue;
-        if (b == Building::Colosseum && c.size < 6) continue;
-        if (b == Building::Cathedral && c.size < 9) continue;
-        if (b == Building::Barracks) continue;
-        if (b == Building::Courthouse && c.has(Building::Palace)) continue;
-        if ((b == Building::Factory || b == Building::PowerPlant) && c.size < 8) continue;
-        pick(false, static_cast<int>(b));
+    const Want wants[] = {
+        {Building::Temple, c.size >= 2 || st.unhappy > 0},
+        {Building::Granary, c.size >= 3 && st.food_surplus >= 1},
+        {Building::Library, st.raw.trade >= 3},
+        {Building::Marketplace, st.raw.trade >= 4 || st.lux > 0},
+        {Building::Courthouse, corruption >= 2 && !c.has(Building::Palace)},
+        {Building::Aqueduct, c.size >= 8},
+        {Building::Colosseum, c.size >= 6 && (st.unhappy > 0 || c.entertainers > 0)},
+        {Building::CityWalls, front && c.size >= 4},
+        {Building::University, st.raw.trade >= 6},
+        {Building::Bank, st.raw.trade >= 8},
+        {Building::Cathedral, c.size >= 9 && (st.unhappy > 0 || c.entertainers > 1)},
+        {Building::Factory, c.size >= 7 && st.raw.shields >= 8},
+        {Building::PowerPlant, c.size >= 8},
+        {Building::MassTransit, c.size >= 12},
+        {Building::RecyclingCenter, c.size >= 12},
+    };
+    for (const Want &w : wants) {
+        if (!w.ok || !can_build(c, false, static_cast<int>(w.b))) continue;
+        pick(false, static_cast<int>(w.b));
         return;
     }
-    if (own_cities + own_settlers < city_target + 4 && c.size >= 3) {
+    // 5. Workers to irrigate and mine: about one for every three cities.
+    if (own_cities >= 3 && own_settlers - workers < 2 && workers < (own_cities + 2) / 3 && c.size >= 4 &&
+        st.food_surplus >= 2) {
         pick(true, static_cast<int>(UnitType::Settlers));
         return;
     }
-    pick(true, best_unit(rng.chance(0.5)));
+    // 6. Anything else still worth building, then a modest army.
+    for (int b = 1; b < kBuildingCount; ++b) {
+        const Building bb = static_cast<Building>(b);
+        if (bb == Building::Palace || bb == Building::SdiDefense || bb == Building::Barracks) continue;
+        if (bb == Building::CityWalls && !front) continue;
+        if (can_build(c, false, b) && building_info(b).upkeep <= (c.size >= 4 ? 2 : 1)) {
+            pick(false, b);
+            return;
+        }
+    }
+    if (own_military < own_cities + 1) {
+        pick(true, best_unit(front && rng.chance(0.5)));
+        return;
+    }
+    // Nothing needed: a worker for later.
+    if (c.size >= 2 && own_settlers <= own_cities / 2) {
+        pick(true, static_cast<int>(UnitType::Settlers));
+        return;
+    }
+    pick(true, best_unit(false));
 }
 
 void Game::ai_diplomacy(int ci)
@@ -172,12 +231,18 @@ bool Game::ai_settler(Unit &u)
 {
     const int ci = u.owner;
     const int id = u.id;
-    if (u.order == Order::Road || u.order == Order::Irrigate || u.order == Order::Mine || u.order == Order::Sentry) {
-        if (u.order != Order::Sentry) return true;
-    }
+    if (u.order == Order::Road || u.order == Order::Irrigate || u.order == Order::Mine) return true;
     int own_cities = 0;
     for (const City &c : cities) own_cities += c.owner == ci;
-    const int city_target = 7 + static_cast<int>(difficulty) * 2 + 4;
+    int improving = 0;
+    for (const Unit &o : units) {
+        if (o.owner == ci && o.id != id && (unit_info(o.type).flags & kSettlers) &&
+            (o.order == Order::Road || o.order == Order::Irrigate || o.order == Order::Mine)) {
+            ++improving;
+        }
+    }
+    const int city_target = 8 + static_cast<int>(difficulty) * 2 + 4;
+    const int want_workers = own_cities >= 3 ? std::max(1, (own_cities + 1) / 3) : 0;
     auto site_ok = [&](int x, int y) {
         if (!map.land(x, y) || !map.valid_y(y) || y < 2 || y >= map.h - 2) return false;
         if (map.at(x, y).terrain == Terrain::Arctic) return false;
@@ -200,13 +265,14 @@ bool Game::ai_settler(Unit &u)
         if (map.at(x, y).terrain == Terrain::River) s += 6;
         return s;
     };
-    if (own_cities < city_target) {
+    const bool heading_to_site = u.order == Order::Goto && u.goto_x >= 0 && site_ok(u.goto_x, u.goto_y);
+    const bool be_worker = !heading_to_site && own_cities >= 1 && improving < want_workers;
+    if (own_cities < city_target && !be_worker) {
         if (own_cities == 0 && site_ok(u.x, u.y)) {
             found_city(id);
             return true;
         }
-        // Heading somewhere already?
-        if (u.order == Order::Goto && u.goto_x >= 0 && site_ok(u.goto_x, u.goto_y)) {
+        if (heading_to_site) {
             for (int g = 0; g < 8; ++g) {
                 Unit *p = unit(id);
                 if (!p || p->moves <= 0 || p->order != Order::Goto) break;
@@ -250,61 +316,74 @@ bool Game::ai_settler(Unit &u)
             return true;
         }
     }
-    // No room left: improve land around the nearest city.
-    const City *home = nullptr;
-    int hd = 1 << 30;
-    for (const City &c : cities) {
-        if (c.owner != ci) continue;
-        const int d = map.distance(c.x, c.y, u.x, u.y);
-        if (d < hd) {
-            hd = d;
-            home = &c;
-        }
-    }
-    if (!home) {
-        sentry(id);
-        return true;
-    }
+    // Improve land: the job that adds the most to a square one of our
+    // cities works (or could work), close by.
     int tx = -1, ty = -1;
     Order job = Order::None;
-    int best = -(1 << 30);
-    for (const auto &o : kCrossAi) {
-        const int x = map.wrap_x(home->x + o[0]), y = home->y + o[1];
-        if (!map.land(x, y)) continue;
-        if (owner_at(x, y) >= 0 && owner_at(x, y) != ci) continue;
-        Unit probe = u;
-        probe.x = x;
-        probe.y = y;
-        const Terrain t = map.at(x, y).terrain;
-        const bool farm = t == Terrain::Grassland || t == Terrain::Plains || t == Terrain::Desert || t == Terrain::River;
-        Order j = Order::None;
-        int s = 0;
-        if (farm && can_work(probe, Order::Irrigate)) {
-            j = Order::Irrigate;
-            s = 20;
-        } else if (farm && can_work(probe, Order::Road)) {
-            j = Order::Road;
-            s = 12;
-        } else if (t == Terrain::Hills && can_work(probe, Order::Mine) && !map.at(x, y).irrigation) {
-            j = Order::Mine;
-            s = 8;
-        }
-        if (j == Order::None) continue;
-        // Skip squares another settler is already working.
-        bool taken = false;
-        for (const Unit &o2 : units) {
-            if (o2.id != u.id && o2.x == x && o2.y == y && (unit_info(o2.type).flags & kSettlers)) taken = true;
-        }
-        if (taken) continue;
-        s -= map.distance(u.x, u.y, x, y) * 2;
-        if (s > best) {
-            best = s;
-            tx = x;
-            ty = y;
-            job = j;
+    int best = 0;
+    for (const City &c : cities) {
+        if (c.owner != ci || map.distance(c.x, c.y, u.x, u.y) > 10) continue;
+        for (const auto &o : kCrossAi) {
+            const int x = map.wrap_x(c.x + o[0]), y = c.y + o[1];
+            if (!map.land(x, y)) continue;
+            if (owner_at(x, y) >= 0 && owner_at(x, y) != ci) continue;
+            bool worked = false;
+            for (const auto &w : c.worked) worked |= w.first == o[0] && w.second == o[1];
+            bool taken = false;
+            for (const Unit &o2 : units) {
+                if (o2.id != u.id && o2.x == x && o2.y == y && (unit_info(o2.type).flags & kSettlers)) taken = true;
+            }
+            if (taken) continue;
+            Unit probe = u;
+            probe.x = x;
+            probe.y = y;
+            const Yield before = tile_yield(x, y, ci, false);
+            const Order jobs[] = {Order::Irrigate, Order::Mine, Order::Road};
+            for (Order j : jobs) {
+                if (!can_work(probe, j)) continue;
+                Tile &t = map.at(x, y);
+                const Tile keep = t;
+                const TerrainInfo &ti = terrain_info(t.terrain);
+                int turns = 0;
+                if (j == Order::Irrigate) {
+                    // Only plain irrigation; changing forest or jungle is slow.
+                    if (ti.irrigate_to != t.terrain) continue;
+                    t.irrigation = true;
+                    t.mine = false;
+                    turns = ti.irrigate_turns;
+                } else if (j == Order::Mine) {
+                    if (ti.mine_to != t.terrain) continue;
+                    t.mine = true;
+                    t.irrigation = false;
+                    turns = ti.mine_turns;
+                } else {
+                    t.road = true;
+                    turns = ti.road_turns;
+                }
+                const Yield after = tile_yield(x, y, ci, false);
+                t = keep;
+                int gain = (after.food - before.food) * 30 + (after.shields - before.shields) * 22 + (after.trade - before.trade) * 18;
+                if (gain <= 0) continue;
+                if (worked) gain *= 2;
+                const int s = gain / std::max(1, turns) - map.distance(u.x, u.y, x, y) * 3;
+                if (s > best) {
+                    best = s;
+                    tx = x;
+                    ty = y;
+                    job = j;
+                }
+            }
         }
     }
     if (tx < 0) {
+        if (own_cities < city_target && be_worker) {
+            // Nothing worth doing nearby: found a city after all.
+            Unit *p = unit(id);
+            if (p && site_ok(p->x, p->y)) {
+                found_city(id);
+                return true;
+            }
+        }
         if (join_city(id)) return true;
         sentry(id);
         return true;
@@ -532,6 +611,21 @@ void Game::ai_play(int ci)
         if (tax > mx) {
             tax = mx;
             lux = 10 - sci - tax;
+        }
+        // Some luxuries when cities have to keep entertainers.
+        int idle = 0, citizens = 0;
+        for (const City &ct : cities) {
+            if (ct.owner != ci) continue;
+            idle += ct.entertainers;
+            citizens += ct.size;
+        }
+        if (citizens > 0 && idle * 6 > citizens && lux == 0) {
+            lux = std::min(3, mx);
+            if (sci >= lux) {
+                sci -= lux;
+            } else {
+                tax -= lux;
+            }
         }
         if (c.sci != sci || c.tax != tax || c.lux != lux) set_rates(ci, tax, lux, sci);
     }

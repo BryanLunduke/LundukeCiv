@@ -534,9 +534,17 @@ void Game::update_city(City &c)
     }
 }
 
+int Game::ai_cost_percent(int civ) const
+{
+    if (civ < 0 || civ >= static_cast<int>(civs.size()) || !civs[civ].ai) return 100;
+    static const int pct[] = {110, 90, 75, 65, 55};
+    return pct[static_cast<int>(difficulty)];
+}
+
 int Game::production_cost(const City &c) const
 {
-    return c.build_unit ? unit_info(c.build).cost : building_info(c.build).cost;
+    const int base = c.build_unit ? unit_info(c.build).cost : building_info(c.build).cost;
+    return std::max(1, base * ai_cost_percent(c.owner) / 100);
 }
 
 int Game::buy_cost(const City &c) const
