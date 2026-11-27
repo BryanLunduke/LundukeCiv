@@ -770,9 +770,22 @@ void App::draw_science(cairo_t *cr, Dialog &d)
     double cy = dialog_frame(cr, x, y, w, h, d.title);
     const double L = x + 24, R = x + w - 24;
     text(cr, kUiFont, "The " + c.name + " know " + std::to_string(g().techs_known(me)) + " of " + std::to_string(kAdvanceCount) +
-                          " advances. Each new advance costs " + std::to_string(g().research_cost(me)) + " bulbs.",
+                          " advances. The next one costs " + std::to_string(g().research_cost(me)) + " bulbs.",
          L, cy, kSlateDim);
-    cy += 24;
+    cy += 22;
+    {
+        // The DOS formula, spelled out: known x bulbs per advance, x2 in AD.
+        const bool ad = year_for_turn(g().turn) > 0;
+        const int known = g().techs_known(me), ratio = g().research_ratio(me);
+        std::string f = std::to_string(known) + " known \u00d7 " + std::to_string(ratio) + " per advance (" +
+                        difficulty_name(g().difficulty);
+        if (g().tech_catchup) f += ", +" + std::to_string(g().tech_catchup) + " to catch up";
+        f += ")";
+        if (ad) f += " \u00d7 2 since 1 AD";
+        f += ", and one bulb more" + std::string(ad ? " (two in AD)." : ".");
+        text(cr, kUiFont, f, L, cy, kSlateDim);
+        cy += 24;
+    }
     if (c.research != Advance::None) {
         text(cr, kBoldFont, std::string("Researching ") + advance_info(c.research).name, L, cy, kSlateGold);
         const int t = research_turns(me);

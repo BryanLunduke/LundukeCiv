@@ -235,6 +235,10 @@ public:
     // -2 lost with its city.
     std::array<int, kWonderCount> wonder_city{};
     std::array<std::uint32_t, kMaxCivs> wonder_started{};  // announced "is building" bits
+    // The DOS game's catch-up step in research cost (0..6), worked out
+    // every 50 turns once the calendar reaches AD: the most advances any
+    // civilization knows, less the turn / 9.
+    int tech_catchup = 0;
 
     Game() { wonder_city.fill(-1); }
 
@@ -262,6 +266,13 @@ public:
     int techs_known(int civ) const;
     bool can_research(int civ, Advance a) const;
     std::vector<Advance> researchable(int civ) const;
+    // Research cost as in DOS Civilization 475.05 (see README):
+    //   ratio = (human: 2 x level + 6, computer: 14 - level) + tech_catchup,
+    //           for a human at least 11 - advances known;
+    //   an advance is found when bulbs / m > advances known x ratio, with
+    //   m = 1 before 1 AD and 2 after; the bulbs then start again from 0.
+    // research_cost is the bulbs that takes: m x (known x ratio + 1).
+    int research_ratio(int civ) const;
     int research_cost(int civ) const;
     void learn(int civ, Advance a);
     bool can_build(const City &c, bool unit, int what) const;
@@ -380,6 +391,8 @@ private:
     void kill_unit(int id);
     void kill_stack(int x, int y);
     void process_city(City &c, bool &learned_any);
+    void check_research(int civ);         // the advance under study is found
+    void update_tech_catchup();
     void start_turn_for(int civ);
     void new_turn();
     void reveal(int civ, int x, int y, int r);

@@ -441,11 +441,54 @@ std::vector<Advance> Game::researchable(int civ) const
     return out;
 }
 
+// Sources: DOS Civilization 475.05's end-of-city research step as rewritten
+// from its disassembly by OpenCivOne (codeberg.org/rhorvat/OpenCivOne,
+// CityWorker.cs and GameEngine.cs: "technologyDifficultyRatio", Var_d2de,
+// the progress doubling at the start of AD), which agrees with "LightBulbs =
+// PreviousAdvances x DifficultyModifier x TimeModifier" (6/8/10/12/14 by
+// level, x2 after 1 AD, at least 10 for the first advance) quoted from
+// "Sid Meier's Civilization, or Rome on 640K a Day" in the CivFanatics Civ1
+// FAQ (section D, tip 2), and with the computer players' +14/+13/+12/+11/+10
+// per advance in the CivFanatics difficulty table.
+int Game::research_ratio(int civ) const
+{
+    const int level = static_cast<int>(difficulty);
+    int ratio = (civs[civ].ai ? 14 - level : 2 * level + 6) + tech_catchup;
+    if (!civs[civ].ai) ratio = std::max(ratio, 11 - techs_known(civ));
+    return ratio;
+}
+
 int Game::research_cost(int civ) const
 {
-    // Linear in advances known, steeper on harder levels (see README).
-    const int mult = 6 + 2 * static_cast<int>(difficulty);
-    return std::max(mult, (techs_known(civ) + 1) * mult);
+    const int m = year_for_turn(turn) < 0 ? 1 : 2;
+    return m * (techs_known(civ) * research_ratio(civ) + 1);
+}
+
+void Game::check_research(int ci)
+{
+    Civ &civ = civs[ci];
+    if (civ.research == Advance::None || civ.barbarian || civ.bulbs < research_cost(ci)) return;
+    civ.bulbs = 0;   // the DOS game starts the next advance from nothing
+    const Advance a = civ.research;
+    learn(ci, a);
+    say(ci, MsgKind::Tech, std::string("Your wise men discover ") + advance_info(a).name + "!");
+    if (civ.ai) choose_research_ai(ci);
+}
+
+void Game::update_tech_catchup()
+{
+    // Every 50 turns (the DOS turn counter starts at 0 in 4000 BC) while a
+    // human plays; nothing before AD.
+    if ((turn - 1) % 50 != 0) return;
+    bool human_plays = false;
+    int most = 0;
+    for (int k = 0; k < static_cast<int>(civs.size()); ++k) {
+        if (civs[k].barbarian) continue;
+        human_plays |= !civs[k].ai;
+        most = std::max(most, techs_known(k));
+    }
+    if (!human_plays) return;
+    tech_catchup = year_for_turn(turn) < 0 ? 0 : std::clamp(most - (turn - 1) / 9, 0, 6);
 }
 
 void Game::learn(int civ, Advance a)
@@ -2428,6 +2471,15 @@ void Game::process_city(City &c, bool &learned_any)
     if (!s.disorder) {
         civ.gold += s.tax;
         civ.bulbs += s.sci;
+        // Chieftain: a human's bulbs count twice toward an advance someone
+        // has already found (DOS).
+        if (!civ.ai && difficulty == Difficulty::Chieftain && civ.research != Advance::None && civ.research != Advance::FutureTech) {
+            bool known = false;
+            for (int k = 0; k < static_cast<int>(civs.size()); ++k) known |= k != c.owner && !civs[k].barbarian && civs[k].techs[static_cast<int>(civ.research)];
+            if (known) civ.bulbs += s.sci;
+        }
+        // As in the DOS game each city's bulbs may finish the advance.
+        check_research(c.owner);
     }
 }
 
@@ -2512,13 +2564,7 @@ void Game::start_turn_for(int ci)
     }
     // Research.
     if (civ.research == Advance::None && civ.ai && !civ.barbarian) choose_research_ai(ci);
-    while (civ.research != Advance::None && civ.bulbs >= research_cost(ci)) {
-        civ.bulbs -= research_cost(ci);
-        const Advance a = civ.research;
-        learn(ci, a);
-        say(ci, MsgKind::Tech, std::string("Your wise men discover ") + advance_info(a).name + "!");
-        if (civ.ai) choose_research_ai(ci);
-    }
+    check_research(ci);
     // Units: new movement, terrain work, fortifying, fuel.
     std::vector<int> uids;
     for (const Unit &u : units) {
@@ -2610,6 +2656,12 @@ void Game::start_turn_for(int ci)
 void Game::new_turn()
 {
     ++turn;
+    // The first year AD doubles the bulbs everyone has toward their advance,
+    // as the cost doubles (DOS).
+    if (year_for_turn(turn - 1) < 0 && year_for_turn(turn) > 0) {
+        for (Civ &c : civs) c.bulbs *= 2;
+    }
+    update_tech_catchup();
     for (int c = 0; c < static_cast<int>(civs.size()); ++c) start_turn_for(c);
     spawn_barbarians();
     space_arrivals();

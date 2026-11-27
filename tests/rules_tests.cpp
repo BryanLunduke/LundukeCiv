@@ -1081,6 +1081,158 @@ static void test_corruption()
     CHECK_EQ(town->stats.corruption, t * 32 * 3 / 120);
 }
 
+// Research cost as in DOS Civilization 475.05: an advance is found when
+// bulbs / m > known x ratio (m = 1 BC, 2 AD), ratio = 2 x level + 6 for a
+// human (at least 11 - known), 14 - level for a computer, plus the catch-up
+// step. Hand-worked examples.
+static void test_research_cost()
+{
+    Game g = flat_game();
+    CHECK(!g.civs[0].ai);
+    CHECK(g.civs[1].ai);
+    auto know = [&](int civ, int n) {
+        g.civs[civ].techs.fill(false);
+        g.civs[civ].future = 0;
+        for (int a = 0; a < n; ++a) g.civs[civ].techs[a] = true;
+        CHECK_EQ(g.techs_known(civ), n);
+    };
+    g.turn = 1;   // 4000 BC
+    g.tech_catchup = 0;
+    // Prince, human, 5 known: ratio max(10, 6) = 10; found past 50 bulbs.
+    g.difficulty = Difficulty::Prince;
+    know(0, 5);
+    CHECK_EQ(g.research_ratio(0), 10);
+    CHECK_EQ(g.research_cost(0), 51);
+    // Computer on Prince: 14 - 2 = 12 per advance: 61.
+    know(1, 5);
+    CHECK_EQ(g.research_ratio(1), 12);
+    CHECK_EQ(g.research_cost(1), 61);
+    // King, human, 1 known: ratio 12 (11 - 1 = 10 is less): 13.
+    g.difficulty = Difficulty::King;
+    know(0, 1);
+    CHECK_EQ(g.research_cost(0), 13);
+    // Chieftain: the "at least 10 for the first advance" rule is 11 - known.
+    g.difficulty = Difficulty::Chieftain;
+    CHECK_EQ(g.research_ratio(0), 10);   // max(6, 10)
+    CHECK_EQ(g.research_cost(0), 11);
+    know(0, 3);
+    CHECK_EQ(g.research_ratio(0), 8);    // max(6, 8)
+    CHECK_EQ(g.research_cost(0), 25);
+    know(0, 6);
+    CHECK_EQ(g.research_ratio(0), 6);
+    CHECK_EQ(g.research_cost(0), 37);
+    CHECK_EQ(g.research_ratio(1), 14);   // computers find Chieftain hardest
+    // Emperor computer, 20 known, after 1 AD: 2 x (20 x 10 + 1) = 402.
+    g.difficulty = Difficulty::Emperor;
+    int ad = 1;
+    while (year_for_turn(ad) < 0) ++ad;
+    CHECK_EQ(year_for_turn(ad), 1);
+    CHECK_EQ(year_for_turn(ad - 1), -20);
+    g.turn = ad;
+    know(1, 20);
+    CHECK_EQ(g.research_cost(1), 402);
+    // Emperor human, 20 known, AD: 2 x (20 x 14 + 1) = 562.
+    know(0, 20);
+    CHECK_EQ(g.research_cost(0), 562);
+    // The catch-up step adds to everyone's ratio: Prince human, 20 known,
+    // catch-up 3, BC: 20 x 13 + 1 = 261.
+    g.difficulty = Difficulty::Prince;
+    g.turn = 1;
+    g.tech_catchup = 3;
+    CHECK_EQ(g.research_cost(0), 261);
+    // Future Tech counts as an advance known.
+    g.civs[0].future = 2;
+    CHECK_EQ(g.research_cost(0), 22 * 13 + 1);
+    g.civs[0].future = 0;
+
+    // The catch-up step: every 50 turns, from AD, most known - turn / 9,
+    // 0 to 6. DOS counts turns from 0, so our turn 251 is its 250.
+    g.tech_catchup = 0;
+    know(0, 10);
+    know(1, 30);
+    g.turn = 251;
+    CHECK(year_for_turn(251) > 0);
+    // Through end_turn, on a world with no cities, from the turn before.
+    g.turn = 250;
+    g.end_turn();
+    CHECK_EQ(g.turn, 251);
+    CHECK_EQ(g.tech_catchup, 30 - 250 / 9);   // 3
+    g.turn = 300;
+    know(1, 60);
+    g.end_turn();                               // turn 301: 60 - 33 = 27, at most 6
+    CHECK_EQ(g.tech_catchup, 6);
+    g.end_turn();                               // turn 302: unchanged
+    CHECK_EQ(g.tech_catchup, 6);
+    g.turn = 100;
+    g.end_turn();                               // turn 101 is BC: none
+    CHECK(year_for_turn(101) < 0);
+    CHECK_EQ(g.tech_catchup, 0);
+
+    // Finding an advance: not at cost - 1, at cost; left-over bulbs are lost.
+    Game r = flat_game();
+    r.difficulty = Difficulty::Prince;
+    const int s = place(r, 0, UnitType::Settlers, 20, 20);
+    CHECK(r.found_city(s, "Lab"));
+    r.civs[0].sci = 10;
+    r.civs[0].tax = 0;
+    r.civs[0].lux = 0;
+    r.civs[0].govt = Government::Monarchy;
+    r.civs[0].techs.fill(false);
+    r.civs[0].techs[static_cast<int>(Advance::Alphabet)] = true;
+    r.civs[0].techs[static_cast<int>(Advance::BronzeWorking)] = true;
+    r.civs[0].research = Advance::Writing;
+    r.update_city(r.cities.back());
+    const int per_turn = r.cities.back().stats.sci;
+    CHECK(per_turn > 0);
+    CHECK_EQ(r.research_cost(0), 2 * 10 + 1);   // max(10, 9) per advance
+    r.civs[0].bulbs = r.research_cost(0) - per_turn - 1;
+    r.end_turn();
+    CHECK(!r.has(0, Advance::Writing));
+    CHECK_EQ(r.civs[0].bulbs, r.research_cost(0) - 1);
+    r.civs[0].bulbs = r.research_cost(0) - per_turn + 5;   // 5 over
+    r.end_turn();
+    CHECK(r.has(0, Advance::Writing));
+    CHECK_EQ(r.civs[0].bulbs, 0);
+
+    // The first year AD doubles the bulbs in hand.
+    Game a = flat_game();
+    a.turn = ad - 1;
+    a.civs[0].research = Advance::Alphabet;
+    for (int civ = 0; civ < 2; ++civ)
+        for (int k = 0; k < 20; ++k) a.civs[civ].techs[k + 30] = true;   // far from the next advance
+    a.civs[0].bulbs = 3;
+    a.civs[1].bulbs = 7;
+    a.end_turn();
+    CHECK_EQ(a.turn, ad);
+    CHECK_EQ(a.civs[0].bulbs, 6);
+    CHECK_EQ(a.civs[1].bulbs, 14);
+
+    // Chieftain: a human's bulbs count twice toward an advance a rival knows.
+    for (int known_by_rival = 0; known_by_rival < 2; ++known_by_rival) {
+        Game c = flat_game();
+        c.difficulty = Difficulty::Chieftain;
+        const int cs = place(c, 0, UnitType::Settlers, 20, 20);
+        CHECK(c.found_city(cs, "Easy"));
+        c.civs[0].sci = 10;
+        c.civs[0].tax = 0;
+        c.civs[0].lux = 0;
+        c.civs[0].research = Advance::Pottery;
+        c.civs[0].bulbs = 0;
+        for (int k = 0; k < 20; ++k) c.civs[0].techs[k + 30] = true;   // a dear next advance
+        c.civs[1].techs[static_cast<int>(Advance::Pottery)] = known_by_rival != 0;
+        c.update_city(c.cities.back());
+        const int sci = c.cities.back().stats.sci;
+        c.end_turn();
+        CHECK_EQ(c.civs[0].bulbs, known_by_rival ? 2 * sci : sci);
+    }
+
+    // Saved and loaded with the game.
+    g.tech_catchup = 4;
+    Game back;
+    CHECK(load_game(save_game(g), back));
+    CHECK_EQ(back.tech_catchup, 4);
+}
+
 static void test_barbarians()
 {
     Game g = flat_game();
@@ -1263,7 +1415,7 @@ int main(int argc, char **argv)
         {"units_table", test_units_table}, {"combat_odds", test_combat_odds},       {"city_growth", test_city_growth},
         {"settlers_work", test_settlers_work}, {"movement", test_movement},          {"save_roundtrip", test_save_roundtrip},
         {"ai_smoke", test_ai_smoke},           {"wonders", test_wonders}, {"envoys", test_envoys},
-        {"railroads", test_railroads}, {"no_pollution", test_no_pollution}, {"specialists", test_specialists}, {"corruption", test_corruption}, {"barbarians", test_barbarians}, {"space_race", test_space_race}, {"pad_nav", test_pad_nav},
+        {"railroads", test_railroads}, {"no_pollution", test_no_pollution}, {"specialists", test_specialists}, {"corruption", test_corruption}, {"research_cost", test_research_cost}, {"barbarians", test_barbarians}, {"space_race", test_space_race}, {"pad_nav", test_pad_nav},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();

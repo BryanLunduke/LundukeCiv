@@ -90,7 +90,7 @@ std::string save_game(const Game &g)
     o << kMagic << "\n";
     o << "game|" << g.turn << "|" << static_cast<int>(g.difficulty) << "|" << g.human << "|" << g.next_unit_id << "|"
       << g.next_city_id << "|" << g.winner << "|" << (g.human_dead ? 1 : 0) << "|" << (g.all_ai ? 1 : 0) << "|" << g.seed
-      << "|" << g.rng.state << "\n";
+      << "|" << g.rng.state << "|" << g.tech_catchup << "\n";
     o << "map|" << g.map.w << "|" << g.map.h << "\n";
     char buf[16];
     for (int y = 0; y < g.map.h; ++y) {
@@ -164,6 +164,7 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             g.seed = f.size() > 9 ? std::strtoull(f[9].c_str(), nullptr, 10) : 1;
             g.rng.state = f.size() > 10 ? std::strtoull(f[10].c_str(), nullptr, 10) : 1;
             if (g.rng.state == 0) g.rng.state = 1;
+            g.tech_catchup = std::clamp(static_cast<int>(num(f, 11)), 0, 6);
         } else if (k == "map") {
             if (num(f, 1) != kMapW || num(f, 2) != kMapH) return fail("Unsupported map size.");
             for (int y = 0; y < kMapH; ++y) {
