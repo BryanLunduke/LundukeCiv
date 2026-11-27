@@ -197,7 +197,7 @@ void App::draw_new_game(cairo_t *cr, Dialog &d)
     if (settings.player_tribe < 0) {
         text(cr, kTagFont, "NAME OF YOUR PEOPLE", L, cy, kSlateDim);
         text(cr, kTagFont, "YOUR NAME AS LEADER", L + half + 16, cy, kSlateDim);
-        cy += 16;
+        cy += 19;
         field(cr, L, cy, half, settings.player_name, new_game_field_ == 0, blink_);
         hot(L, cy, half, 34, [this] { new_game_field_ = 0; });
         field(cr, L + half + 16, cy, half, settings.player_leader, new_game_field_ == 1, blink_);
@@ -227,7 +227,8 @@ void App::draw_new_game(cairo_t *cr, Dialog &d)
         text(cr, kUiFont, facts, L + 82, cy + 6, kSlateInk, 1.0, static_cast<int>(R - L - 82));
         cy += 80;
     }
-    section(cr, "WORLD", L, cy, R);
+    section(cr, "WORLD", L, cy, L + half);
+    section(cr, "WORLD SEED", L + half + 16, cy, R);
     cy += 20;
     const char *worlds[3] = {"Random", "Earth", "Customize..."};
     const double ww = (half - 16) / 3;
@@ -245,7 +246,6 @@ void App::draw_new_game(cairo_t *cr, Dialog &d)
             }
         });
     }
-    text(cr, kTagFont, "WORLD SEED", L + half + 16, cy - 14, kSlateDim);
     field(cr, L + half + 16, cy, half, seed_text_, new_game_field_ == 2, blink_);
     hot(L + half + 16, cy, half, 34, [this] { new_game_field_ = 2; });
     cy += 40;
@@ -466,11 +466,11 @@ void App::draw_city(cairo_t *cr, Dialog &d)
             const bool grows = gv == Government::Republic || gv == Government::Democracy;
             text(cr, kBoldFont, std::string("\u2605 We Love the ") + g().leader_title(c.owner) + " Day!", L, cy, kSlateGold);
             cy += 20;
-            text(cr, kTagFont, grows ? "+1 trade on worked squares with trade; the city grows each turn it has spare food."
-                                     : (gv == Government::Monarchy || gv == Government::Communism ? "+1 trade on worked squares with trade."
-                                                                                                   : "No despotic -1 on rich squares."),
-                 L, cy, kSlateDim, 1.0, static_cast<int>(lw));
-            cy += 18;
+            const std::string why = grows ? "+1 trade on worked squares with trade; the city grows each turn it has spare food."
+                                          : (gv == Government::Monarchy || gv == Government::Communism ? "+1 trade on worked squares with trade."
+                                                                                                        : "No despotic -1 on rich squares.");
+            text(cr, kTagFont, why, L, cy, kSlateDim, 1.0, static_cast<int>(lw));
+            cy += measure(cr, kTagFont, why, static_cast<int>(lw)).h + 4;
         }
     }
     cy += 8;
@@ -708,7 +708,7 @@ void App::draw_city(cairo_t *cr, Dialog &d)
             std::string how = c.build_unit ? std::to_string(r) + "\u00b2/20 + 2\u00d7" + std::to_string(r)
                                            : (wonder ? "4\u00d7" : "2\u00d7") + std::to_string(r);
             how += " shields left";
-            if (c.shields == 0) how += ", doubled: nothing built yet";
+            if (c.shields == 0) how += ", \u00d72 from scratch";
             text(cr, kTagFont, "Buy: " + how + (c.bought ? " \u00b7 bought this turn" : ""), rx + 2, ry, kSlateDim);
         }
         ry += 18;
