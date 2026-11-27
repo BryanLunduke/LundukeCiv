@@ -1023,6 +1023,7 @@ bool App::key(const KeyEvent &k)
         open(d);
         return true;
     }
+    case 'e': open_databank(0); return true;
     case 'y': {
         Dialog d;
         d.kind = DialogKind::Spaceship;
@@ -1190,7 +1191,7 @@ std::vector<App::MenuItem> App::menu_items(int menu)
         break;
     default:
         for (int t = 0; t < static_cast<int>(DatabankTopic::Count); ++t)
-            items.push_back({databank_topic_name(static_cast<DatabankTopic>(t)), "", [this, t] { open_databank(t); }});
+            items.push_back({databank_topic_name(static_cast<DatabankTopic>(t)), t == 0 ? "E" : "", [this, t] { open_databank(t); }});
         items.push_back({"Unit Chart", "", dialog(DialogKind::UnitSheet, "Databank: Unit Chart")});
         break;
     }
