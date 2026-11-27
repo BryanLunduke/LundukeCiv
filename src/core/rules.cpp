@@ -80,7 +80,6 @@ const AdvanceInfo kAdvances[kAdvanceCount] = {
     {"Plastics", A::Refining, A::SpaceFlight},
     {"Pottery", A::None, A::None},
     {"Railroad", A::BridgeBuilding, A::SteamEngine},
-    {"Recycling", A::MassProduction, A::Democracy},
     {"Refining", A::Corporation, A::Chemistry},
     {"Religion", A::Philosophy, A::Writing},
     {"The Republic", A::CodeOfLaws, A::Literacy},

@@ -50,7 +50,7 @@ enum class Advance : std::uint8_t {
     Feudalism, Flight, FusionPower, FutureTech, GeneticEngineering, Gunpowder, HorsebackRiding,
     Industrialization, Invention, IronWorking, LaborUnion, Literacy, Magnetism, MapMaking, Masonry,
     MassProduction, Mathematics, Medicine, Metallurgy, Monarchy, Mysticism, Navigation, NuclearFission,
-    NuclearPower, Philosophy, Physics, Plastics, Pottery, Railroad, Recycling, Refining, Religion,
+    NuclearPower, Philosophy, Physics, Plastics, Pottery, Railroad, Refining, Religion,
     Republic, Robotics, Rocketry, SpaceFlight, SteamEngine, Steel, Superconductor, TheoryOfGravity,
     Trade, University, TheWheel, Writing,
     Count,

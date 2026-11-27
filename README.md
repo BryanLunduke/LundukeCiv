@@ -1,6 +1,6 @@
 # Lunduke Civ
 
-Lunduke Civ is a turn-based game of building an empire from a single settler in 4000 BC. It plays by the rules of the 1991 DOS *Civilization*: the same terrain table, the same 28 units with their attack, defense, movement, cost, required advance and obsolescence, the same advance tree (67 advances plus Future Tech), the same governments and city growth. Everything is re-implemented; every picture is original pixel art drawn by code, in the look of Lunduke City 2.
+Lunduke Civ is a turn-based game of building an empire from a single settler in 4000 BC. It plays by the rules of the 1991 DOS *Civilization*: the same terrain table, the same 28 units with their attack, defense, movement, cost, required advance and obsolescence, the same advance tree (66 advances plus Future Tech, without Recycling, see below), the same governments and city growth. Everything is re-implemented; every picture is original pixel art drawn by code, in the look of Lunduke City 2.
 
 The default window is **1280×800** (Steam Deck native) and is resizable down to 1024×700.
 
@@ -65,7 +65,7 @@ Diplomats moving into a foreign city (or onto a lone foreign unit) can establish
 
 Barbarians appear from turn 50: landings from the sea next to a coastal city (raiders, their ship and a Barbarian Leader) or uprisings in empty country, with armies that grow with the age of the world. They never make peace and do not count toward victory. Their ships sail off once the raiders are ashore; the raiders march on the nearest city, burn a town of size 1 or 2 and keep a larger one (a captured city holds only a few troops). Walking onto a Barbarian Leader left alone pays 100 gold ransom. With Railroad known, Settlers lay railroad on a road (R): moving along it costs nothing and the square gives +50% shields; city squares get railroad automatically.
 
-Unlike the DOS game there is no pollution and no global warming: industry never dirties the land and the climate never changes. Mass Transit and the Recycling Center, whose only job was to cut pollution, are left out (Recycling is still an advance to research, with nothing to build). Power, Hydro and Nuclear Plants and the Hoover Dam keep their DOS effect of +50% shields with a Factory. Older saves still load; their polluted squares and warming are dropped, and a city that was building Mass Transit or a Recycling Center switches to a defender.
+Unlike the DOS game there is no pollution and no global warming: industry never dirties the land and the climate never changes. Mass Transit and the Recycling Center, whose only job was to cut pollution, are left out, and so is the Recycling advance, which only led to the Recycling Center: no other advance needed it, so nothing else in the tree changes, and Mass Production and Democracy simply lead to one advance fewer. Power, Hydro and Nuclear Plants and the Hoover Dam keep their DOS effect of +50% shields with a Factory. Older saves still load; their polluted squares and warming are dropped, and a city that was building Mass Transit or a Recycling Center switches to a defender, and a civilization that knew or was researching Recycling forgets it (it no longer counts toward the cost of the next advance).
 
 The space race opens once anyone completes the Apollo Program. Cities then build spaceship parts like improvements: SS Structurals (Space Flight, 80 shields, up to 39), SS Components (Plastics, 160, up to 16, fuel and propulsion in turn) and SS Modules (Superconductor, 320, up to 12, habitation, life support and solar panels in turn). Every component and module needs a structural to hold it. The Spaceship screen (Y) shows the ship on its blueprint with colonists, life support, energy, mass, flight time and chance of success, and launches it from the capital (L). The ship flies for 4 + 0.6 x mass units / engine pairs years; if it arrives (by its chance of success) its owner wins. If the capital falls, the ship is lost, on the pad or in flight. Computer players build a modest complete ship and launch it, sooner if a rival is already on the way.
 
@@ -93,7 +93,7 @@ Sources: the research step of DOS Civilization 475.05 as rewritten from its disa
 | `src/art` | Original pixel art: terrain painter, rivers, cities, unit counters, icons |
 | `src/ui` | The Lunduke City 2-style interface: band, sidebar, map, dialogs |
 | `src/main.cpp` | SDL3 window, input, Cairo surface → texture |
-| `tests` | `meson test`: calendar, yields, tech tree, unit table, combat, growth, settlers, movement, save round trip, AI smoke game, wonders, envoys, railroads, no pollution, specialists, corruption, research cost, barbarians, space race, controller navigation |
+| `tests` | `meson test`: calendar, yields, tech tree, unit table, combat, growth, settlers, movement, save round trip, AI smoke game, wonders, envoys, railroads, no pollution, no Recycling, specialists, corruption, research cost, barbarians, space race, controller navigation |
 | `packaging/windows`, `cross` | Windows cross build |
 
 ## License

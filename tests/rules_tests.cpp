@@ -172,7 +172,7 @@ static void test_tech_prereqs()
         }
     }
     CHECK_EQ(static_cast<long long>(known.size()), kAdvanceCount);
-    CHECK_EQ(kAdvanceCount, 68);
+    CHECK_EQ(kAdvanceCount, 67);   // the DOS 68 without Recycling
     CHECK(advance_info(Advance::Monarchy).req1 == Advance::CeremonialBurial || advance_info(Advance::Monarchy).req2 == Advance::CeremonialBurial);
     CHECK(advance_info(Advance::Writing).req1 == Advance::Alphabet);
     Game g = flat_game();
@@ -794,7 +794,7 @@ static void test_no_pollution()
     CHECK(g.found_city(s, "Smokestack"));
     City &c = g.cities.back();
     for (Advance a : {Advance::Industrialization, Advance::Automobile, Advance::MassProduction, Advance::Plastics,
-                      Advance::Refining, Advance::Electricity, Advance::Robotics, Advance::Recycling})
+                      Advance::Refining, Advance::Electricity, Advance::Robotics})
         g.learn(0, a);
     c.size = 20;
     c.add(Building::Aqueduct);
@@ -821,14 +821,13 @@ static void test_no_pollution()
         CHECK(m.text.find("ollution") == std::string::npos);
         CHECK(m.text.find("warming") == std::string::npos);
     }
-    // Mass Transit and the Recycling Center are gone; Recycling stays an advance.
+    // Mass Transit and the Recycling Center are gone (and so is Recycling).
     for (int b = 0; b < kBuildingCount; ++b) {
         CHECK(std::strcmp(building_info(b).name, "Mass Transit") != 0);
         CHECK(std::strcmp(building_info(b).name, "Recycling Center") != 0);
     }
-    CHECK(std::strcmp(advance_info(Advance::Recycling).name, "Recycling") == 0);
     const std::string text = save_game(g);
-    CHECK(text.rfind("LUNDUKECIV 3\n", 0) == 0);
+    CHECK(text.rfind("LUNDUKECIV 4\n", 0) == 0);
     CHECK(text.find("climate|") == std::string::npos);
 
     // A version 2 save: City Walls, Factory, Mass Transit, Mfg. Plant,
@@ -840,7 +839,7 @@ static void test_no_pollution()
     CHECK(v.found_city(vs, "Oldtown"));
     const int cleaner = place(v, 0, UnitType::Settlers, 31, 31);
     std::string old = save_game(v);
-    old.replace(0, std::strlen("LUNDUKECIV 3"), "LUNDUKECIV 2");
+    old.replace(0, std::strlen("LUNDUKECIV 4"), "LUNDUKECIV 2");
     {
         // City line: field 9 build_unit, 10 build, 11 buildings.
         const size_t at = old.find("city|");
@@ -892,6 +891,73 @@ static void test_no_pollution()
     const std::string again = save_game(w);
     CHECK(again.find("climate|") == std::string::npos);
     CHECK(save_game(w) == again);
+    Game x;
+    CHECK(load_game(again, x));
+    CHECK(save_game(x) == again);
+}
+
+// The Recycling advance is gone (with nothing left to build it only cost
+// bulbs): no advance is named Recycling or needs it, and saves from before
+// (version 3 and older, 68 advances, Recycling at index 53 between Railroad
+// and Refining) load with the later advances moved down one and Recycling
+// forgotten, also as a research goal.
+static void test_no_recycling()
+{
+    for (int i = 0; i < kAdvanceCount; ++i) {
+        const AdvanceInfo &a = advance_info(static_cast<Advance>(i));
+        CHECK(std::strcmp(a.name, "Recycling") != 0);
+        CHECK(a.req1 == Advance::None || static_cast<int>(a.req1) < kAdvanceCount);
+        CHECK(a.req2 == Advance::None || static_cast<int>(a.req2) < kAdvanceCount);
+    }
+    CHECK_EQ(static_cast<int>(Advance::Railroad), 52);
+    CHECK_EQ(static_cast<int>(Advance::Refining), 53);
+    // A version 3 save. Civ 0 knows Railroad, Recycling and Theory of
+    // Gravity and is researching Recycling; civ 1 knows Refining and is
+    // researching Robotics (old index 57).
+    Game v = flat_game();
+    v.civs[0].techs.fill(false);
+    v.civs[1].techs.fill(false);
+    std::string old = save_game(v);
+    old.replace(0, std::strlen("LUNDUKECIV 4"), "LUNDUKECIV 3");
+    for (int civ = 0; civ < 2; ++civ) {
+        size_t at = 0;
+        for (int k = 0; k <= civ; ++k) at = old.find("civ|", at + (k ? 1 : 0));
+        const size_t eol = old.find('\n', at);
+        std::string line = old.substr(at, eol - at);
+        std::vector<std::string> f;
+        size_t p0 = 0;
+        for (size_t p1; (p1 = line.find('|', p0)) != std::string::npos; p0 = p1 + 1) f.push_back(line.substr(p0, p1 - p0));
+        f.push_back(line.substr(p0));
+        std::string techs(68, '0');
+        if (civ == 0) {
+            techs[52] = '1';   // Railroad
+            techs[53] = '1';   // Recycling
+            techs[63] = '1';   // Theory of Gravity (62 now)
+            f[14] = "53";
+        } else {
+            techs[54] = '1';   // Refining (53 now)
+            f[14] = "57";      // Robotics (56 now)
+        }
+        f[13] = techs;
+        std::string nl;
+        for (size_t i = 0; i < f.size(); ++i) nl += (i ? "|" : "") + f[i];
+        old.replace(at, eol - at, nl);
+    }
+    Game w;
+    std::string err;
+    CHECK(load_game(old, w, &err));
+    CHECK(err.empty());
+    CHECK(w.has(0, Advance::Railroad));
+    CHECK(w.has(0, Advance::TheoryOfGravity));
+    CHECK(!w.has(0, Advance::Refining));
+    CHECK_EQ(w.techs_known(0), 2);
+    CHECK(w.civs[0].research == Advance::None);
+    CHECK(w.has(1, Advance::Refining));
+    CHECK_EQ(w.techs_known(1), 1);
+    CHECK(w.civs[1].research == Advance::Robotics);
+    // Saved again it is a version 4 save that loads the same.
+    const std::string again = save_game(w);
+    CHECK(again.rfind("LUNDUKECIV 4\n", 0) == 0);
     Game x;
     CHECK(load_game(again, x));
     CHECK(save_game(x) == again);
@@ -1422,7 +1488,7 @@ int main(int argc, char **argv)
         {"units_table", test_units_table}, {"combat_odds", test_combat_odds},       {"city_growth", test_city_growth},
         {"settlers_work", test_settlers_work}, {"movement", test_movement},          {"save_roundtrip", test_save_roundtrip},
         {"ai_smoke", test_ai_smoke},           {"wonders", test_wonders}, {"envoys", test_envoys},
-        {"railroads", test_railroads}, {"no_pollution", test_no_pollution}, {"specialists", test_specialists}, {"corruption", test_corruption}, {"research_cost", test_research_cost}, {"barbarians", test_barbarians}, {"space_race", test_space_race}, {"pad_nav", test_pad_nav},
+        {"railroads", test_railroads}, {"no_pollution", test_no_pollution}, {"no_recycling", test_no_recycling}, {"specialists", test_specialists}, {"corruption", test_corruption}, {"research_cost", test_research_cost}, {"barbarians", test_barbarians}, {"space_race", test_space_race}, {"pad_nav", test_pad_nav},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();

@@ -16,7 +16,8 @@ namespace civ {
 
 namespace {
 
-constexpr const char *kMagic = "LUNDUKECIV 3";      // written
+constexpr const char *kMagic = "LUNDUKECIV 4";      // written
+constexpr const char *kMagic3 = "LUNDUKECIV 3";     // still read: before Recycling was dropped
 constexpr const char *kMagic2 = "LUNDUKECIV 2";     // still read: milestone 2 saves
 constexpr const char *kMagic1 = "LUNDUKECIV 1";     // still read: milestone 1 saves
 
@@ -46,6 +47,28 @@ int building_from_v2(int old)
     if (old < 0 || old >= kOldBuildingCount) return old;   // wonders, spaceship parts
     if (old == kOldMassTransit || old == kOldRecycling) return -1;
     return old - (old > kOldMassTransit ? 1 : 0) - (old > kOldRecycling ? 1 : 0);
+}
+
+// Saves before version 4 still had the Recycling advance (index 53 between
+// Railroad and Refining): the advances after it move down one, and a
+// civilization that knew it simply forgets it.
+constexpr int kOldRecyclingAdvance = 53;
+constexpr int kOldAdvanceCount = 68;
+
+std::string techs_from_v3(const std::string &old)
+{
+    std::string out;
+    for (int i = 0; i < kOldAdvanceCount && i < static_cast<int>(old.size()); ++i)
+        if (i != kOldRecyclingAdvance) out += old[i];
+    return out;
+}
+
+// An advance index from a version 3 save: None for Recycling.
+int advance_from_v3(int old)
+{
+    if (old == kOldRecyclingAdvance) return static_cast<int>(Advance::None);
+    if (old > kOldRecyclingAdvance && old < kOldAdvanceCount) return old - 1;
+    return old;
 }
 
 std::string clean(const std::string &s)
@@ -144,8 +167,8 @@ bool load_game(const std::string &text, Game &out, std::string *error)
     };
     std::istringstream in(text);
     std::string line;
-    if (!std::getline(in, line) || (line != kMagic && line != kMagic2 && line != kMagic1)) return fail("Not a Lunduke Civ saved game.");
-    const int version = line == kMagic ? 3 : (line == kMagic2 ? 2 : 1);
+    if (!std::getline(in, line) || (line != kMagic && line != kMagic3 && line != kMagic2 && line != kMagic1)) return fail("Not a Lunduke Civ saved game.");
+    const int version = line == kMagic ? 4 : line == kMagic3 ? 3 : (line == kMagic2 ? 2 : 1);
     Game g;
     bool ended = false;
     while (std::getline(in, line)) {
@@ -200,9 +223,16 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             c.govt = static_cast<Government>(num(f, 10));
             c.target = static_cast<Government>(num(f, 11));
             c.anarchy = static_cast<int>(num(f, 12));
-            const std::string techs = f.size() > 13 ? f[13] : "";
+            std::string techs = f.size() > 13 ? f[13] : "";
+            int research = static_cast<int>(num(f, 14));
+            if (version < 4) {
+                techs = techs_from_v3(techs);
+                research = advance_from_v3(research);
+            }
             for (int i = 0; i < kAdvanceCount && i < static_cast<int>(techs.size()); ++i) c.techs[i] = techs[i] == '1';
-            c.research = static_cast<Advance>(num(f, 14));
+            if (research < 0 || (research >= kAdvanceCount && research != static_cast<int>(Advance::None)))
+                research = static_cast<int>(Advance::None);
+            c.research = static_cast<Advance>(research);
             c.bulbs = static_cast<int>(num(f, 15));
             c.future = static_cast<int>(num(f, 16));
             c.name_next = static_cast<int>(num(f, 17));
