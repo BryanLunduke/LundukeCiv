@@ -217,6 +217,11 @@ struct GameSettings {
     int player_color = 1;      // a people of the player's own making (tribe -1)
     int player_tribe = -1;     // or one of the fourteen (tribe_info)
     int land_pct = 32;
+    // Customize World (see MapSettings), or the Earth.
+    bool earth = false;
+    int temperature = 1;
+    int climate = 1;
+    int age = 1;
     bool all_ai = false;       // autoplay: the player's civ is run by the computer too
 };
 

@@ -62,9 +62,22 @@ struct Map {
 
 struct MapSettings {
     std::uint64_t seed = 1;
-    int land_pct = 32;     // share of the map that is land
+    int land_pct = 32;     // share of the map that is land (Customize World: 24 / 32 / 40)
     bool huts = true;
+    // Customize World, as in the DOS game; 1 is the middle choice of each.
+    int temperature = 1;   // 0 cool, 1 temperate, 2 warm
+    int climate = 1;       // 0 arid, 1 normal, 2 wet
+    int age = 1;           // 0 three billion years (rugged), 1 four, 2 five (worn down)
+    bool earth = false;    // the Earth instead of a random world (land_pct is then ignored)
 };
+
+// The Earth map's data (earth.cpp): land by square, and the regions that
+// steer its terrain.
+enum class EarthZone : std::uint8_t { None, Desert, Jungle, Mountains, Hills, Ice, Temperate };
+bool earth_land(int x, int y);
+EarthZone earth_zone(int x, int y);
+double earth_lon(int x);
+double earth_lat(int y);
 
 Map generate_map(const MapSettings &s);
 

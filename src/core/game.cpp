@@ -46,6 +46,10 @@ Game Game::create(const GameSettings &s)
     MapSettings ms;
     ms.seed = s.seed;
     ms.land_pct = s.land_pct;
+    ms.earth = s.earth;
+    ms.temperature = s.temperature;
+    ms.climate = s.climate;
+    ms.age = s.age;
     g.map = generate_map(ms);
     const int n = std::clamp(s.civs, 2, kMaxCivs);
     g.civs.resize(n);

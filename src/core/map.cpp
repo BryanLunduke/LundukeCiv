@@ -124,17 +124,38 @@ Map generate_map(const MapSettings &s)
         for (int x = 0; x < m.w; ++x) {
             double e = smooth(x / 10.0, y / 8.0, 8, seed) * 0.55 + smooth(x / 5.0, y / 4.0, 16, seed + 1) * 0.30 +
                        smooth(x / 2.5, y / 2.0, 32, seed + 2) * 0.15;
-            // Keep the poles watery except for the ice rows.
-            const double lat = std::fabs((y + 0.5) / m.h - 0.5) * 2.0;
-            e -= std::max(0.0, lat - 0.75) * 0.8;
+            if (s.earth) {
+                // The outline decides land and sea; ranges lift the ground.
+                const EarthZone z = earth_zone(x, y);
+                e = earth_land(x, y) ? 1.0 + e * 0.5 : e - 2.0;
+                if (z == EarthZone::Mountains && e > 1.0) e += 0.35;
+                if (z == EarthZone::Hills && e > 1.0) e += 0.2;
+                if (z == EarthZone::Temperate) e -= 0.15;
+            } else {
+                // Keep the poles watery except for the ice rows.
+                const double lat = std::fabs((y + 0.5) / m.h - 0.5) * 2.0;
+                e -= std::max(0.0, lat - 0.75) * 0.8;
+            }
             elev[static_cast<size_t>(y) * m.w + x] = e;
         }
     }
     std::vector<double> sorted = elev;
     std::sort(sorted.begin(), sorted.end());
-    const double sea = sorted[static_cast<size_t>(sorted.size() * (100 - s.land_pct) / 100)];
-    const double hill = sorted[static_cast<size_t>(sorted.size() * (100 - s.land_pct / 5) / 100)];
-    const double peak = sorted[static_cast<size_t>(sorted.size() * (100 - s.land_pct / 12) / 100)];
+    int land_pct = s.land_pct;
+    if (s.earth) {
+        int n = 0;
+        for (double e : elev) n += e >= 0.5;
+        land_pct = n * 100 / static_cast<int>(elev.size());
+    }
+    // Age (DOS): a young world keeps more hills and mountains.
+    const int hill_div = s.age <= 0 ? 4 : (s.age >= 2 ? 7 : 5);
+    const int peak_div = s.age <= 0 ? 9 : (s.age >= 2 ? 18 : 12);
+    const double sea = s.earth ? 0.5 : sorted[static_cast<size_t>(sorted.size() * (100 - land_pct) / 100)];
+    const double hill = sorted[std::min(sorted.size() - 1, static_cast<size_t>(sorted.size() * (100 - land_pct / hill_div) / 100))];
+    const double peak = sorted[std::min(sorted.size() - 1, static_cast<size_t>(sorted.size() * (100 - land_pct / peak_div) / 100))];
+    // Temperature and climate shift the bands (DOS: cool/warm, arid/wet).
+    const double warm = (s.temperature - 1) * 0.12;
+    const double damp = (s.climate - 1) * 0.12;
     for (int y = 0; y < m.h; ++y) {
         for (int x = 0; x < m.w; ++x) {
             const double e = elev[static_cast<size_t>(y) * m.w + x];
@@ -144,8 +165,13 @@ Map generate_map(const MapSettings &s)
                 continue;
             }
             const double lat = std::fabs((y + 0.5) / m.h - 0.5) * 2.0; // 0 equator .. 1 pole
-            const double wet = smooth(x / 6.0, y / 5.0, 13, seed + 7) + (rng.unit() - 0.5) * 0.25;
-            const double temp = 1.0 - lat + (smooth(x / 7.0, y / 6.0, 11, seed + 9) - 0.5) * 0.25;
+            double wet = smooth(x / 6.0, y / 5.0, 13, seed + 7) + (rng.unit() - 0.5) * 0.25 + damp;
+            double temp = 1.0 - lat + (smooth(x / 7.0, y / 6.0, 11, seed + 9) - 0.5) * 0.25 + warm;
+            const EarthZone z = s.earth ? earth_zone(x, y) : EarthZone::None;
+            if (z == EarthZone::Desert) wet -= 0.45;
+            if (z == EarthZone::Jungle) wet += 0.35;
+            if (z == EarthZone::Temperate) wet = 0.42 + (wet - 0.5) * 0.4;
+            if (z == EarthZone::Ice) temp = 0.0;
             Terrain k;
             if (e > peak) {
                 k = Terrain::Mountains;
@@ -160,6 +186,8 @@ Map generate_map(const MapSettings &s)
             } else if (temp > 0.6 && wet > 0.7) {
                 k = Terrain::Swamp;
             } else if (temp > 0.6 && temp < 0.85 && wet < 0.33) {
+                k = Terrain::Desert;
+            } else if (z == EarthZone::Desert && wet < 0.33) {
                 k = Terrain::Desert;
             } else if (wet > 0.58) {
                 k = Terrain::Forest;

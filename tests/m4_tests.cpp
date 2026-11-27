@@ -765,6 +765,89 @@ static void test_tribes()
     CHECK(save_game(g) == save_game(h));
 }
 
+static void test_worlds()
+{
+    auto count = [](const Map &m, Terrain k) {
+        int n = 0;
+        for (const Tile &t : m.tiles) n += t.terrain == k;
+        return n;
+    };
+    auto land = [](const Map &m) {
+        int n = 0;
+        for (const Tile &t : m.tiles) n += t.terrain != Terrain::Ocean;
+        return n;
+    };
+    // The Earth: the same every time, and the continents where they belong.
+    MapSettings e;
+    e.earth = true;
+    e.seed = 1;
+    const Map a = generate_map(e);
+    e.seed = 99;
+    const Map b = generate_map(e);
+    int differ = 0;   // the ice rows at the poles are random
+    for (int i = 2 * kMapW; i < kMapW * (kMapH - 2); ++i) differ += (a.tiles[i].terrain == Terrain::Ocean) != (b.tiles[i].terrain == Terrain::Ocean);
+    CHECK_EQ(differ, 0);
+    auto at = [&](double lon, double lat) {
+        const int x = static_cast<int>((lon + 180.0) / 360.0 * kMapW);
+        const int y = static_cast<int>((90.0 - lat) / 180.0 * kMapH);
+        return a.at(x, y).terrain;
+    };
+    CHECK(at(-100, 40) != Terrain::Ocean);   // North America
+    CHECK(at(-60, -10) != Terrain::Ocean);   // South America
+    CHECK(at(20, 0) != Terrain::Ocean);      // Africa
+    CHECK(at(90, 55) != Terrain::Ocean);     // Siberia
+    CHECK(at(135, -25) != Terrain::Ocean);   // Australia
+    CHECK(at(-30, 30) == Terrain::Ocean);    // Atlantic
+    CHECK(at(-150, 0) == Terrain::Ocean);    // Pacific
+    CHECK(at(75, -20) == Terrain::Ocean);    // Indian Ocean
+    CHECK(at(10, 23) == Terrain::Desert);    // Sahara
+    CHECK(land(a) > kMapW * kMapH / 5 && land(a) < kMapW * kMapH * 2 / 5);
+    // Customize World: land mass, temperature, climate and age.
+    MapSettings s;
+    s.seed = 1234;
+    s.land_pct = 24;
+    const int small = land(generate_map(s));
+    s.land_pct = 40;
+    const int large = land(generate_map(s));
+    CHECK(large > small + kMapW * kMapH / 10);
+    s.land_pct = 32;
+    s.temperature = 0;
+    const Map cool = generate_map(s);
+    s.temperature = 2;
+    const Map hot = generate_map(s);
+    CHECK(count(cool, Terrain::Tundra) + count(cool, Terrain::Arctic) > count(hot, Terrain::Tundra) + count(hot, Terrain::Arctic));
+    CHECK(count(hot, Terrain::Desert) + count(hot, Terrain::Jungle) >= count(cool, Terrain::Desert) + count(cool, Terrain::Jungle));
+    s.temperature = 1;
+    s.climate = 0;
+    const Map arid = generate_map(s);
+    s.climate = 2;
+    const Map wet = generate_map(s);
+    CHECK(count(arid, Terrain::Desert) > count(wet, Terrain::Desert));
+    CHECK(count(wet, Terrain::Forest) + count(wet, Terrain::Jungle) + count(wet, Terrain::Swamp) >
+          count(arid, Terrain::Forest) + count(arid, Terrain::Jungle) + count(arid, Terrain::Swamp));
+    s.climate = 1;
+    s.age = 0;
+    const Map young = generate_map(s);
+    s.age = 2;
+    const Map old = generate_map(s);
+    CHECK(count(young, Terrain::Hills) + count(young, Terrain::Mountains) > count(old, Terrain::Hills) + count(old, Terrain::Mountains));
+    // The middle choices are the old generator, unchanged.
+    s.age = 1;
+    MapSettings plain;
+    plain.seed = 1234;
+    const Map m1 = generate_map(s), m2 = generate_map(plain);
+    bool same = true;
+    for (int i = 0; i < kMapW * kMapH; ++i) same = same && m1.tiles[i].terrain == m2.tiles[i].terrain;
+    CHECK(same);
+    // A game on the Earth.
+    GameSettings g;
+    g.earth = true;
+    g.civs = 5;
+    const Game game = Game::create(g);
+    CHECK(game.map.at(static_cast<int>((20 + 180.0) / 360.0 * kMapW), static_cast<int>(90.0 / 180.0 * kMapH)).terrain != Terrain::Ocean);
+    CHECK_EQ(static_cast<long long>(game.units.size()) >= 5, 1);
+}
+
 // ---------------------------------------------------------------- runner
 
 int main(int argc, char **argv)
@@ -775,7 +858,7 @@ int main(int argc, char **argv)
         {"barracks", test_barracks}, {"capture", test_capture}, {"nuke", test_nuke}, {"trireme", test_trireme},
         {"air_targets", test_air_targets}, {"orders", test_orders}, {"disasters", test_disasters},
         {"treaties", test_treaties}, {"senate", test_senate}, {"tribute", test_tribute}, {"talks", test_talks},
-        {"ai_peace", test_ai_peace}, {"civil_war", test_civil_war}, {"tribes", test_tribes},
+        {"ai_peace", test_ai_peace}, {"civil_war", test_civil_war}, {"tribes", test_tribes}, {"worlds", test_worlds},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();
