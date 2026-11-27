@@ -898,6 +898,36 @@ static void test_databank()
 
 // ---------------------------------------------------------------- runner
 
+// Musketeers are the DOS 3/3/1 for 30 shields, and the AI keeps them home
+// as defenders while a Legion beside them marches on the enemy.
+static void test_musketeers()
+{
+    const UnitInfo &m = unit_info(UnitType::Musketeers);
+    CHECK_EQ(m.attack, 3);
+    CHECK_EQ(m.defense, 3);
+    CHECK_EQ(m.moves, 1);
+    CHECK_EQ(m.cost, 30);
+    CHECK(m.tech == Advance::Gunpowder);
+    CHECK(m.obsolete == Advance::Conscription);
+    auto left_home = [](UnitType t) {
+        Game g = flat_game();
+        g.civs[1].ai = true;
+        g.civs[0].ai = false;
+        town(g, 1, 20, 20, 3, "Home");
+        town(g, 0, 26, 20, 3, "Target");
+        g.declare_war(1, 0);
+        std::vector<int> ids;
+        for (int k = 0; k < 4; ++k) ids.push_back(place(g, 1, t, 20, 20));
+        g.ai_play(1);
+        int gone = 0;
+        for (int id : ids)
+            if (const Unit *u = g.unit(id)) gone += u->x != 20 || u->y != 20;
+        return gone;
+    };
+    CHECK_EQ(left_home(UnitType::Musketeers), 0);
+    CHECK(left_home(UnitType::Legion) > 0);
+}
+
 int main(int argc, char **argv)
 {
     const std::map<std::string, std::function<void()>> tests = {
@@ -906,7 +936,7 @@ int main(int argc, char **argv)
         {"barracks", test_barracks}, {"capture", test_capture}, {"nuke", test_nuke}, {"trireme", test_trireme},
         {"air_targets", test_air_targets}, {"orders", test_orders}, {"disasters", test_disasters},
         {"treaties", test_treaties}, {"senate", test_senate}, {"tribute", test_tribute}, {"talks", test_talks},
-        {"ai_peace", test_ai_peace}, {"civil_war", test_civil_war}, {"tribes", test_tribes}, {"worlds", test_worlds}, {"databank", test_databank},
+        {"ai_peace", test_ai_peace}, {"civil_war", test_civil_war}, {"tribes", test_tribes}, {"worlds", test_worlds}, {"databank", test_databank}, {"musketeers", test_musketeers},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();

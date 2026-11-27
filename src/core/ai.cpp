@@ -639,9 +639,11 @@ void Game::ai_unit(Unit &start)
             move(id, ax, ay);
             continue;
         }
-        // March on the nearest enemy city we know of.
+        // March on the nearest enemy city we know of. Units as strong in
+        // defence as in attack (Militia, Musketeers, Mech. Inf.) are
+        // defenders, as in the DOS game, and stay home.
         int tx = -1, ty = -1, td = 1 << 30;
-        if (info.attack >= info.defense) {
+        if (info.attack > info.defense) {
             const int cont = map.at(u->x, u->y).continent;
             for (const City &c : cities) {
                 if (!at_war(ci, c.owner)) continue;

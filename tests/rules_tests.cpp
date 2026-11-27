@@ -205,7 +205,7 @@ static void test_units_table()
     const Row rows[] = {
         {UnitType::Settlers, 0, 1, 1, 40},   {UnitType::Militia, 1, 1, 1, 10},    {UnitType::Phalanx, 1, 2, 1, 20},
         {UnitType::Legion, 3, 1, 1, 20},     {UnitType::Chariot, 4, 1, 2, 40},    {UnitType::Cavalry, 2, 1, 2, 20},
-        {UnitType::Knights, 4, 2, 2, 40},    {UnitType::Catapult, 6, 1, 1, 40},   {UnitType::Musketeers, 2, 3, 1, 30},
+        {UnitType::Knights, 4, 2, 2, 40},    {UnitType::Catapult, 6, 1, 1, 40},   {UnitType::Musketeers, 3, 3, 1, 30},
         {UnitType::Riflemen, 3, 5, 1, 30},   {UnitType::Cannon, 8, 1, 1, 40},     {UnitType::Artillery, 12, 2, 2, 60},
         {UnitType::Armor, 10, 5, 3, 80},     {UnitType::MechInf, 6, 6, 3, 50},    {UnitType::Diplomat, 0, 0, 2, 30},
         {UnitType::Caravan, 0, 1, 1, 50},    {UnitType::Trireme, 1, 0, 3, 40},    {UnitType::Sail, 1, 1, 3, 40},

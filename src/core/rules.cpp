@@ -107,7 +107,7 @@ const UnitInfo kUnits[kUnitTypeCount] = {
     {"Cavalry", D::Land, 2, 1, 2, 20, A::HorsebackRiding, A::Conscription, 0, 0, 0},
     {"Knights", D::Land, 4, 2, 2, 40, A::Chivalry, A::Automobile, 0, 0, 0},
     {"Catapult", D::Land, 6, 1, 1, 40, A::Mathematics, A::Metallurgy, 0, 0, 0},
-    {"Musketeers", D::Land, 2, 3, 1, 30, A::Gunpowder, A::Conscription, 0, 0, 0},
+    {"Musketeers", D::Land, 3, 3, 1, 30, A::Gunpowder, A::Conscription, 0, 0, 0},
     {"Riflemen", D::Land, 3, 5, 1, 30, A::Conscription, A::None, 0, 0, 0},
     {"Cannon", D::Land, 8, 1, 1, 40, A::Metallurgy, A::Robotics, 0, 0, 0},
     {"Artillery", D::Land, 12, 2, 2, 60, A::Robotics, A::None, kIgnoreWalls, 0, 0},
