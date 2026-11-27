@@ -230,6 +230,18 @@ City *Game::capital(int civ)
     }
     return nullptr;
 }
+
+int Game::palace_distance(const City &c) const
+{
+    if (c.owner >= 0 && c.owner < static_cast<int>(civs.size()) && civs[c.owner].govt == Government::Communism) return kCommunismDistance;
+    if (c.has(Building::Palace)) return 0;
+    int d = kNoPalaceDistance;
+    for (const City &o : cities) {
+        if (o.id != c.id && o.owner == c.owner && o.has(Building::Palace)) d = std::min(d, map.dos_distance(c.x, c.y, o.x, o.y));
+    }
+    return d;
+}
+
 int Game::cargo_count(int ship_id) const
 {
     int n = 0;
@@ -643,16 +655,10 @@ void Game::update_city(City &c)
             shields = shields * pct / 100;
         }
         s.shield_surplus = shields - s.shield_upkeep;
-        // Corruption grows with distance from the Palace.
-        int dist = 20;
-        for (const City &o : cities) {
-            if (o.owner == c.owner && o.has(Building::Palace)) dist = map.distance(c.x, c.y, o.x, o.y);
-        }
-        int corr_pct = civ.govt == Government::Communism ? 20 : std::min(60, gi.corruption_pct * dist / 10);
-        if (civ.govt == Government::Democracy) corr_pct = 0;
-        if (c.has(Building::Courthouse)) corr_pct /= 2;
-        if (c.has(Building::Palace)) corr_pct = 0;
-        s.corruption = raw.trade * corr_pct / 100;
+        // Corruption grows with distance from the Palace (DOS formula, see
+        // dos_corruption): on all the city's trade, trade routes included.
+        s.palace_distance = palace_distance(c);
+        s.corruption = dos_corruption(raw.trade, s.palace_distance, civ.govt, c.has(Building::Courthouse));
         const int trade = raw.trade - s.corruption;
         int sci = (trade * civ.sci + 5) / 10;
         int lux = std::min(trade - sci, (trade * civ.lux + 5) / 10);

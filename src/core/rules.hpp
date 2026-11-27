@@ -166,11 +166,20 @@ struct GovernmentInfo {
     const char *name;
     Advance tech;
     int max_rate;          // tenths for any one of tax/lux/sci
-    int corruption_pct;    // per tile from the capital, in tenths of a percent
     int settler_food;
     int free_units;        // -1: city size
 };
 const GovernmentInfo &government_info(Government g);
+
+// Corruption, exactly as DOS Civilization 475.05 works it out (see README):
+//   corruption = trade * distance * 3 / (20 * government + 80)
+// with government numbered Anarchy 0, Despotism 1, Monarchy 2, Communism 3,
+// Republic 4 (Democracy has none), integer division, then halved (rounded
+// down) by a Courthouse. `distance` is to the Palace (dos_distance, 0 in the
+// capital, 32 with no Palace); under Communism it is always 10.
+constexpr int kNoPalaceDistance = 32;
+constexpr int kCommunismDistance = 10;
+int dos_corruption(int trade, int distance, Government g, bool courthouse);
 
 enum class Difficulty : std::uint8_t { Chieftain, Warlord, Prince, King, Emperor, Count };
 const char *difficulty_name(Difficulty d);

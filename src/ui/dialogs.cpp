@@ -398,6 +398,19 @@ void App::draw_city(cairo_t *cr, Dialog &d)
         text(cr, kUiFont, "Tax " + std::to_string(s.tax) + "  \u00b7  Lux " + std::to_string(s.lux) + "  \u00b7  Sci " +
                               std::to_string(s.sci), L, cy, kSlateInk);
         cy += 20;
+        {
+            // Where the corruption comes from (the DOS formula: trade x distance x 3 / government).
+            const Government gv = g().civs[c.owner].govt;
+            std::string why;
+            if (gv == Government::Democracy) why = "Democracy: no corruption";
+            else if (gv == Government::Communism) why = "Communism: as if 10 squares from the Palace";
+            else if (c.has(Building::Palace)) why = "The Palace is here: no corruption";
+            else if (s.palace_distance >= kNoPalaceDistance) why = "Corruption as if 32 squares away (no Palace near)";
+            else why = std::to_string(s.palace_distance) + " squares from the Palace";
+            if (c.has(Building::Courthouse) && gv != Government::Democracy) why += " \u00b7 Courthouse halves it";
+            text(cr, kUiFont, why, L, cy, kSlateDim);
+            cy += 20;
+        }
         text(cr, kUiFont, "Upkeep: " + std::to_string(s.shield_upkeep) + " shields, " + std::to_string(s.food_upkeep) + " food",
              L, cy, kSlateDim);
         cy += 20;
@@ -980,9 +993,9 @@ void App::draw_cities(cairo_t *cr, Dialog &d)
     const double x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
     double cy = dialog_frame(cr, x, y, w, h, d.title);
     const double L = x + 24, R = x + w - 24;
-    const double cols[] = {L, L + 200, L + 260, L + 330, L + 400, L + 470};
-    const char *heads[] = {"CITY", "SIZE", "FOOD", "SHIELDS", "TRADE", "PRODUCING"};
-    for (int i = 0; i < 6; ++i) text(cr, kTagFont, heads[i], cols[i], cy, kSlateDim);
+    const double cols[] = {L, L + 190, L + 240, L + 300, L + 370, L + 430, L + 540};
+    const char *heads[] = {"CITY", "SIZE", "FOOD", "SHIELDS", "TRADE", "CORRUPT", "PRODUCING"};
+    for (int i = 0; i < 7; ++i) text(cr, kTagFont, heads[i], cols[i], cy, kSlateDim);
     cy += 18;
     for (const City *c : list) {
         if (cy + 30 > y + h - 64) break;
@@ -999,8 +1012,13 @@ void App::draw_cities(cairo_t *cr, Dialog &d)
              s.food_surplus < 0 ? kSlateBad : kSlateInk);
         text(cr, kUiFont, std::to_string(s.shield_surplus), cols[3], cy + 4, kSlateInk);
         text(cr, kUiFont, std::to_string(s.raw.trade), cols[4], cy + 4, kSlateInk);
+        // Corruption, with the distance it is worked out from.
+        text(cr, kUiFont, std::to_string(s.corruption) + "  \u00b7 " + (c->has(Building::Palace) && g().civs[me].govt != Government::Communism
+                                                                          ? std::string("Palace")
+                                                                          : std::to_string(s.palace_distance) + " sq"),
+             cols[5], cy + 4, s.corruption ? kSlateInk : kSlateDim);
         const std::string prod = c->build_unit ? unit_info(c->build).name : building_info(c->build).name;
-        text(cr, kUiFont, prod + "  (" + std::to_string(c->shields) + "/" + std::to_string(g().production_cost(*c)) + ")", cols[5], cy + 4,
+        text(cr, kUiFont, prod + "  (" + std::to_string(c->shields) + "/" + std::to_string(g().production_cost(*c)) + ")", cols[6], cy + 4,
              kSlateDim);
         const int id = c->id;
         hot(L - 6, cy, R - L + 12, 28, [this, id] { open_city(id); });

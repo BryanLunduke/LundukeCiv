@@ -1012,6 +1012,75 @@ static void test_specialists()
     CHECK_EQ(c->entertainers, c->size - static_cast<int>(c->worked.size()));
 }
 
+// Corruption as DOS Civilization 475.05 works it out:
+//   trade * distance * 3 / (20 * government + 80), Courthouse halves,
+//   Communism counts 10 squares, Democracy none, no Palace 32 squares.
+// Hand-worked examples.
+static void test_corruption()
+{
+    Game g = flat_game();
+    // The DOS distance: the long leg plus half the short one, rounded down.
+    CHECK_EQ(g.map.dos_distance(20, 20, 27, 23), 8);    // 7 + 3/2
+    CHECK_EQ(g.map.dos_distance(20, 20, 24, 24), 6);    // 4 + 4/2
+    CHECK_EQ(g.map.dos_distance(20, 20, 20, 29), 9);
+    CHECK_EQ(g.map.dos_distance(1, 10, 78, 11), 3);     // across the date line: 3 + 1/2
+    // 20 trade, 8 squares: 480 / divisor.
+    CHECK_EQ(dos_corruption(20, 8, Government::Anarchy, false), 6);    // 480 / 80
+    CHECK_EQ(dos_corruption(20, 8, Government::Despotism, false), 4);  // 480 / 100 = 4.8
+    CHECK_EQ(dos_corruption(20, 8, Government::Monarchy, false), 4);   // 480 / 120
+    CHECK_EQ(dos_corruption(20, 8, Government::Republic, false), 3);   // 480 / 160 = 3.0
+    CHECK_EQ(dos_corruption(20, 8, Government::Democracy, false), 0);
+    CHECK_EQ(dos_corruption(20, 8, Government::Monarchy, true), 2);    // halved
+    CHECK_EQ(dos_corruption(20, 8, Government::Despotism, true), 2);   // 4 / 2
+    // Communism always counts 10 squares: 600 / 140 = 4.28.
+    CHECK_EQ(dos_corruption(20, kCommunismDistance, Government::Communism, false), 4);
+    // No Palace: 32 squares. 10 trade under Despotism: 960 / 100 = 9.6.
+    CHECK_EQ(dos_corruption(10, kNoPalaceDistance, Government::Despotism, false), 9);
+    // 17 trade, 13 squares, Republic: 663 / 160 = 4.1; a Courthouse: 2.
+    CHECK_EQ(dos_corruption(17, 13, Government::Republic, false), 4);
+    CHECK_EQ(dos_corruption(17, 13, Government::Republic, true), 2);
+    CHECK_EQ(dos_corruption(5, 0, Government::Despotism, false), 0);   // the capital
+
+    // In a game: a capital and a town 8 squares off.
+    const int s1 = place(g, 0, UnitType::Settlers, 20, 20);
+    CHECK(g.found_city(s1, "Capitol"));
+    const int s2 = place(g, 0, UnitType::Settlers, 27, 23);
+    CHECK(g.found_city(s2, "Farfield"));
+    City *cap = g.city_at(20, 20);
+    City *town = g.city_at(27, 23);
+    CHECK(cap && town && cap->has(Building::Palace) && !town->has(Building::Palace));
+    if (!cap || !town) return;
+    town->size = 6;
+    for (int dy = -2; dy <= 2; ++dy)
+        for (int dx = -2; dx <= 2; ++dx) g.map.at(27 + dx, 23 + dy).road = true;
+    for (Government gv : {Government::Anarchy, Government::Despotism, Government::Monarchy, Government::Communism,
+                          Government::Republic, Government::Democracy}) {
+        g.civs[0].govt = gv;
+        g.update_city(*town);
+        g.update_city(*cap);
+        const int want_d = gv == Government::Communism ? 10 : 8;
+        CHECK_EQ(town->stats.palace_distance, want_d);
+        CHECK(town->stats.raw.trade > 0);
+        CHECK_EQ(town->stats.corruption, dos_corruption(town->stats.raw.trade, want_d, gv, false));
+        // The capital has none, except under Communism (10 squares there too).
+        CHECK_EQ(cap->stats.corruption, gv == Government::Communism ? cap->stats.raw.trade * 30 / 140 : 0);
+    }
+    // Monarchy, by hand: the town's trade times 8 x 3 / 120, then a Courthouse.
+    g.civs[0].govt = Government::Monarchy;
+    g.update_city(*town);
+    const int t = town->stats.raw.trade;
+    CHECK_EQ(town->stats.corruption, t * 24 / 120);
+    town->add(Building::Courthouse);
+    g.update_city(*town);
+    CHECK_EQ(town->stats.corruption, t * 24 / 120 / 2);
+    town->remove(Building::Courthouse);
+    // The Palace lost: 32 squares.
+    cap->remove(Building::Palace);
+    g.update_city(*town);
+    CHECK_EQ(town->stats.palace_distance, kNoPalaceDistance);
+    CHECK_EQ(town->stats.corruption, t * 32 * 3 / 120);
+}
+
 static void test_barbarians()
 {
     Game g = flat_game();
@@ -1194,7 +1263,7 @@ int main(int argc, char **argv)
         {"units_table", test_units_table}, {"combat_odds", test_combat_odds},       {"city_growth", test_city_growth},
         {"settlers_work", test_settlers_work}, {"movement", test_movement},          {"save_roundtrip", test_save_roundtrip},
         {"ai_smoke", test_ai_smoke},           {"wonders", test_wonders}, {"envoys", test_envoys},
-        {"railroads", test_railroads}, {"no_pollution", test_no_pollution}, {"specialists", test_specialists}, {"barbarians", test_barbarians}, {"space_race", test_space_race}, {"pad_nav", test_pad_nav},
+        {"railroads", test_railroads}, {"no_pollution", test_no_pollution}, {"specialists", test_specialists}, {"corruption", test_corruption}, {"barbarians", test_barbarians}, {"space_race", test_space_race}, {"pad_nav", test_pad_nav},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();

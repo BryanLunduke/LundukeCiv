@@ -52,6 +52,9 @@ struct Map {
         return d;
     }
     int distance(int x0, int y0, int x1, int y1) const;  // Chebyshev, with wrap
+    // The DOS game's distance for corruption: the longer of the two legs
+    // plus half the shorter (rounded down), with the east-west wrap.
+    int dos_distance(int x0, int y0, int x1, int y1) const;
     bool coastal(int x, int y) const;                    // land next to ocean
     bool next_to_land(int x, int y) const;
     void label_continents();

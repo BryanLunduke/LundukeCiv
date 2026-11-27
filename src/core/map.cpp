@@ -15,6 +15,12 @@ int Map::distance(int x0, int y0, int x1, int y1) const
     return std::max(std::abs(dx(x0, x1)), std::abs(y1 - y0));
 }
 
+int Map::dos_distance(int x0, int y0, int x1, int y1) const
+{
+    const int ax = std::abs(dx(x0, x1)), ay = std::abs(y1 - y0);
+    return std::max(ax, ay) + std::min(ax, ay) / 2;
+}
+
 bool Map::coastal(int x, int y) const
 {
     if (!land(x, y)) {

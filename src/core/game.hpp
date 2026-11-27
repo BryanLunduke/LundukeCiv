@@ -59,6 +59,7 @@ struct CityStats {
     int unhappy = 0;
     int food_box = 0;
     bool disorder = false;
+    int palace_distance = 0; // for corruption (DOS distance; 10 under Communism)
     int base_trade = 0;     // trade from the land, before trade routes
     int route_trade = 0;    // added by trade routes
 };
@@ -251,6 +252,10 @@ public:
     bool enemy_at(int civ, int x, int y) const;      // a foreign unit or city
     int owner_at(int x, int y) const;                // -1 empty
     City *capital(int civ);
+    // Distance from this city to its owner's Palace as corruption counts it:
+    // 0 in the capital, kNoPalaceDistance at most (or with no Palace), and
+    // kCommunismDistance everywhere under Communism.
+    int palace_distance(const City &c) const;
 
     // --- knowledge
     bool has(int civ, Advance a) const { return a == Advance::None || civs[civ].techs[static_cast<int>(a)]; }
