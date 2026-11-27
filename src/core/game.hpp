@@ -222,6 +222,51 @@ struct GameSettings {
 
 const char *player_city_name(int i);
 
+// Relations between two peoples. Everyone starts with no treaty; a war ends
+// in a cease-fire (kCeasefireTurns, then war again) and a cease-fire may
+// become a peace treaty. A Republic or Democracy's Senate holds to them.
+enum class Treaty : std::uint8_t { War, None, Ceasefire, Peace };
+const char *treaty_name(Treaty t);
+
+// An audience with a foreign leader. The computer rulers' come to the human
+// player through Game::talks, to be answered with answer_talk.
+enum class TalkKind : std::uint8_t {
+    Greeting,        // first meeting, nothing asked
+    Tribute,         // pay `gold` or there is war
+    TechDemand,      // give `tech` or there is war
+    Ceasefire,       // offer to stop a war
+    Peace,           // offer a peace treaty
+    TechForPeace,    // `tech` given for a peace treaty
+    Embassy,         // exchange embassies
+    WarDeclared,     // news: they attack
+    TreatyCancelled, // news: they tore up a treaty
+    CeasefireOver,   // news: the cease-fire has run out
+    Count
+};
+struct Talk {
+    int from = -1;
+    int to = -1;
+    TalkKind kind = TalkKind::Greeting;
+    int gold = 0;
+    Advance tech = Advance::None;
+    bool forced = false;   // the Senate accepted it for us: OK only
+    std::string text;      // what the leader says
+};
+bool talk_has_choice(const Talk &t);   // accept / refuse, or just OK
+
+// What one ruler thinks of another (after DOS MeetWithKing): fear of the
+// other's defences, a demand built from where our attack beats them, and
+// hostility when that pays.
+struct Attitude {
+    int fear = 0;
+    int demand = 0;
+    bool hostile = false;
+    int tribute = 0;       // gold it would ask, in 50s
+};
+
+// A proposal the player makes in Foreign Affairs.
+enum class Proposal : std::uint8_t { Ceasefire, Peace, Embassy, CancelTreaty };
+
 class Game {
 public:
     Map map;
@@ -356,8 +401,31 @@ public:
     void disband(int unit_id);
     void set_goto(int unit_id, int x, int y);
     bool step_goto(int unit_id);          // one move toward the goto target
-    void declare_war(int a, int b);
-    void make_peace(int a, int b);
+    void declare_war(int a, int b);       // breaks any treaty: a grudge on b's side
+    void make_peace(int a, int b);        // a peace treaty
+    void make_ceasefire(int a, int b);
+    Treaty treaty(int a, int b) const;
+    bool has_treaty(int a, int b) const { return treaty(a, b) == Treaty::Ceasefire || treaty(a, b) == Treaty::Peace; }
+    // A Republic or Democracy has a Senate: it accepts every cease-fire and
+    // peace offered, and will not break a treaty.
+    bool senate(int civ) const;
+    bool senate_blocks(int a, int b) const { return senate(a) && has_treaty(a, b); }
+
+    // --- diplomacy (DOS MeetWithKing, approximated: see README)
+    Attitude attitude(int ai, int other) const;
+    int civ_score(int civ) const;          // DOS ranking points
+    int civ_rank(int civ) const;           // 7 strongest, down to 0
+    std::vector<Talk> talks;               // waiting for the human player, oldest first
+    // The human player's answer to talks.front(): true accepts (pays,
+    // gives, signs). Removes it and returns what happens.
+    std::string answer_talk(bool accept);
+    // The player asks a computer ruler; `accepted` reports the answer.
+    std::string propose(int from, int to, Proposal p, bool *accepted = nullptr);
+    std::string leader_greeting(int civ) const;
+    // Civil war (DOS): a computer people with more than four cities that
+    // loses its capital while stronger than the human player splits in
+    // two. Returns the new civ index, -1 if none.
+    int civil_war(int civ, int cap_x, int cap_y);
     bool at_war(int a, int b) const
     {
         return a != b && (civs[a].barbarian || civs[b].barbarian || ((civs[a].war >> b) & 1u));
@@ -462,6 +530,10 @@ private:
     void ai_city(City &c);
     void ai_unit(Unit &u);
     void ai_diplomacy(int civ);
+    void meet(int ai, int other);          // one audience, if one is due
+    void deliver(Talk t);                  // to the human's queue, or settled at once between computers
+    bool settle(const Talk &t, bool accept, std::string *what);
+    void ceasefires_end();
     bool ai_settler(Unit &u);
     void ai_envoy(Unit &u);    // Diplomats and Caravans
     void ai_barbarians(int civ);

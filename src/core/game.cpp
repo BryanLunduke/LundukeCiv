@@ -1306,6 +1306,11 @@ bool Game::diplomat_can(int unit_id, int tx, int ty, DiploAction a) const
     if (!map.valid_y(ty) || map.distance(u->x, u->y, tx, ty) > 1) return false;
     const City *c = city_at(tx, ty);
     const int me = u->owner;
+    if (diplomat_hostile(a)) {
+        // The Senate will not let a hostile act break a treaty.
+        const int them = c ? c->owner : owner_at(tx, ty);
+        if (them >= 0 && !at_war(me, them) && senate_blocks(me, them)) return false;
+    }
     if (a == DiploAction::Bribe) {
         if (c) return false;
         const std::vector<int> here = units_at(tx, ty);
@@ -1718,7 +1723,7 @@ MoveResult Game::move(int unit_id, int dx, int dy)
         // Diplomats and Caravans deal with what they meet.
         if (u->type == UnitType::Diplomat && (city_at(tx, ty) || units_at(tx, ty).size() == 1)) return MoveResult::Diplomat;
         if (u->type == UnitType::Caravan && city_at(tx, ty)) return MoveResult::Caravan;
-        if (!at_war(u->owner, other)) return MoveResult::NeedWar;
+        if (!at_war(u->owner, other)) return senate_blocks(u->owner, other) ? MoveResult::Senate : MoveResult::NeedWar;
         if (i.flags & kNuclear) return nuke(unit_id, tx, ty);
         const bool has_units = !units_at(tx, ty).empty();
         if (has_units && !city_at(tx, ty) && u->type != UnitType::Fighter) {
@@ -2110,6 +2115,7 @@ void Game::capture_city(City &c, int new_owner)
         // The capital falls: the spaceship is lost, on the pad or in flight.
         lose_spaceship(old, civs[old].launch_turn >= 0);
     }
+    const bool capital = c.has(Building::Palace);
     c.remove(Building::Palace);
     // DOS Actions.cs CityTakeover: the city loses one size; a size-1 city
     // is destroyed. The conqueror takes an advance the loser knew.
@@ -2157,6 +2163,29 @@ void Game::capture_city(City &c, int new_owner)
     say(old, MsgKind::Bad, c.name + " has fallen to the " + civs[new_owner].name + ".", c.x, c.y);
     update_city(c);
     reveal(new_owner, c.x, c.y, 2);
+    if (capital && !civs[old].barbarian) {
+        const int cx = c.x, cy = c.y;   // c may move when civs grow
+        if (civil_war(old, cx, cy) < 0 && civs[old].ai) {
+            // No civil war: the court moves to the farthest city.
+            City *seat = nullptr;
+            int best = -1;
+            for (City &o : cities) {
+                if (o.owner != old) continue;
+                const int d = map.distance(o.x, o.y, cx, cy);
+                if (d > best) {
+                    best = d;
+                    seat = &o;
+                }
+            }
+            if (seat) {
+                seat->add(Building::Palace);
+                say(old, MsgKind::Info, "A new Palace rises in " + seat->name + ".", seat->x, seat->y);
+                for (City &o : cities) {
+                    if (o.owner == old) update_city(o);
+                }
+            }
+        }
+    }
     check_elimination();
 }
 
@@ -2483,22 +2512,6 @@ bool Game::join_city(int unit_id)
     kill_unit(unit_id);
     update_city(*c);
     return true;
-}
-
-void Game::declare_war(int a, int b)
-{
-    if (a == b || is_barbarian(a) || is_barbarian(b)) return;
-    civs[a].war |= static_cast<std::uint8_t>(1u << b);
-    civs[b].war |= static_cast<std::uint8_t>(1u << a);
-    say(a, MsgKind::Bad, "You are at war with the " + civs[b].name + ".");
-    say(b, MsgKind::Bad, "The " + civs[a].name + " declare war on you!");
-}
-
-void Game::make_peace(int a, int b)
-{
-    if (is_barbarian(a) || is_barbarian(b)) return;   // no peace with raiders
-    civs[a].war &= static_cast<std::uint8_t>(~(1u << b));
-    civs[b].war &= static_cast<std::uint8_t>(~(1u << a));
 }
 
 void Game::set_rates(int civ, int tax, int lux, int sci)
@@ -3123,6 +3136,7 @@ void Game::new_turn()
     update_tech_catchup();
     for (int c = 0; c < static_cast<int>(civs.size()); ++c) start_turn_for(c);
     natural_disasters();
+    ceasefires_end();
     spawn_barbarians();
     space_arrivals();
     check_elimination();

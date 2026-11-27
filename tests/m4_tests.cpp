@@ -9,6 +9,7 @@
 #include "game.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdio>
 #include <functional>
 #include <map>
@@ -489,6 +490,281 @@ static void test_disasters()
     }
 }
 
+
+// ---------------------------------------------------------------- A: diplomacy
+
+static void test_treaties()
+{
+    Game g = flat_game();
+    CHECK(g.treaty(0, 1) == Treaty::None);
+    g.declare_war(0, 1);
+    CHECK(g.treaty(1, 0) == Treaty::War);
+    g.make_ceasefire(0, 1);
+    CHECK(g.treaty(0, 1) == Treaty::Ceasefire);
+    CHECK(!g.at_war(0, 1));
+    // A cease-fire runs out into war.
+    const int until = g.civs[0].ceasefire_end[1];
+    CHECK_EQ(until, g.turn + kCeasefireTurns);
+    while (g.turn < until) g.end_turn();
+    CHECK(g.treaty(0, 1) == Treaty::War);
+    bool told = false;
+    for (const Talk &t : g.talks) told |= t.kind == TalkKind::CeasefireOver;
+    CHECK(told);
+    g.make_peace(0, 1);
+    CHECK(g.treaty(0, 1) == Treaty::Peace);
+    // Breaking a treaty leaves a grudge.
+    g.declare_war(1, 0);
+    CHECK((g.civs[0].vendetta >> 1) & 1u);
+    CHECK(!((g.civs[1].vendetta >> 0) & 1u));
+}
+
+static void test_senate()
+{
+    Game g = flat_game();
+    g.civs[0].govt = Government::Republic;
+    g.make_peace(0, 1);
+    town(g, 1, 12, 10, 3, "Neighbour");
+    const int a = place(g, 0, UnitType::Legion, 11, 10);
+    CHECK(g.senate_blocks(0, 1));
+    CHECK(g.move(a, 1, 0) == MoveResult::Senate);
+    bool ok = true;
+    CHECK(g.propose(0, 1, Proposal::CancelTreaty, &ok).find("Senate") != std::string::npos);
+    CHECK(!ok);
+    CHECK(g.treaty(0, 1) == Treaty::Peace);
+    // A Despot answers to no one: it may cancel and attack.
+    g.civs[0].govt = Government::Despotism;
+    CHECK(g.move(a, 1, 0) == MoveResult::NeedWar);
+    g.propose(0, 1, Proposal::CancelTreaty, &ok);
+    CHECK(ok);
+    CHECK(g.at_war(0, 1));
+    // The Senate accepts offers of peace for us.
+    Game h = flat_game();
+    h.civs[0].govt = Government::Democracy;
+    town(h, 0, 10, 10, 3, "Free");
+    town(h, 1, 30, 10, 3, "Tired");
+    h.civs[0].contact = 2;
+    h.civs[1].contact = 1;
+    h.declare_war(0, 1);
+    h.turn = 40;
+    h.civs[1].last_talk[0] = h.civs[0].last_talk[1] = 20;   // long enough at war
+    h.talks.clear();
+    h.ai_play(1);
+    CHECK(h.treaty(0, 1) != Treaty::War);
+    bool forced = false;
+    for (const Talk &x : h.talks) forced |= x.forced && x.from == 1;
+    CHECK(forced);
+}
+
+static void test_tribute()
+{
+    Game g = flat_game();
+    g.difficulty = Difficulty::King;   // level 3
+    g.civs[0].gold = 1000;
+    town(g, 0, 10, 10, 3, "Weak");
+    town(g, 1, 20, 10, 3, "Strong");
+    for (int k = 0; k < 6; ++k) place(g, 1, UnitType::Legion, 20, 10);
+    place(g, 0, UnitType::Militia, 10, 10);
+    const Attitude a = g.attitude(1, 0);
+    // demand = 6 x 4 attack - 1 defence = 23; the Mongols-or-whoever's
+    // leanings may scale it. tribute = clamp(demand x 4 / 32, 0, 20) x 50.
+    CHECK(a.demand > 0);
+    CHECK(a.hostile);
+    CHECK_EQ(a.tribute, std::clamp(a.demand * 4 / 32, 0, 20) * 50);
+    // Strong defences instead make them afraid.
+    for (int k = 0; k < 8; ++k) place(g, 0, UnitType::Musketeers, 20, 9);   // on their land
+    const Attitude b = g.attitude(1, 0);
+    CHECK(b.fear > 0);
+    CHECK(!b.hostile);
+    // The Great Wall keeps them friendly.
+    Game w = flat_game();
+    town(w, 0, 10, 10, 3, "Walled");
+    w.wonder_city[static_cast<int>(Wonder::GreatWall)] = w.city_at(10, 10)->id;
+    town(w, 1, 20, 10, 3, "Strong");
+    for (int k = 0; k < 6; ++k) place(w, 1, UnitType::Legion, 20, 10);
+    CHECK(!w.attitude(1, 0).hostile);
+}
+
+static void test_talks()
+{
+    // A hostile neighbour comes to demand tribute; paying keeps the peace,
+    // refusing means war.
+    auto setup = []() {
+        Game g = flat_game();
+        g.civs[0].gold = 500;
+        town(g, 0, 10, 10, 3, "Weak");
+        town(g, 1, 20, 10, 3, "Strong");
+        for (int k = 0; k < 8; ++k) place(g, 1, UnitType::Legion, 20, 10);
+        g.civs[0].contact = 2;
+        g.civs[1].contact = 1;
+        g.ai_play(1);
+        return g;
+    };
+    Game g = setup();
+    CHECK(!g.talks.empty());
+    CHECK(g.talks.front().from == 1);
+    const TalkKind k = g.talks.front().kind;
+    CHECK(k == TalkKind::Tribute || k == TalkKind::TechDemand || k == TalkKind::WarDeclared);
+    if (k == TalkKind::Tribute) {
+        const int ask = g.talks.front().gold;
+        CHECK(ask > 0 && ask % 50 == 0);
+        Game pay = g;
+        pay.answer_talk(true);
+        CHECK_EQ(pay.civs[0].gold, 500 - ask);
+        CHECK(!pay.at_war(0, 1));
+        g.answer_talk(false);
+        CHECK(g.at_war(0, 1));
+    }
+    // A friendly one offers peace; accepting signs it.
+    Game f = flat_game();
+    town(f, 0, 10, 10, 3, "Calm");
+    town(f, 1, 20, 10, 3, "Calm too");
+    f.civs[0].contact = 2;
+    f.civs[1].contact = 1;
+    f.ai_play(1);
+    CHECK(!f.talks.empty());
+    CHECK(f.talks.front().kind == TalkKind::Peace);
+    CHECK(talk_has_choice(f.talks.front()));
+    f.answer_talk(true);
+    CHECK(f.treaty(0, 1) == Treaty::Peace);
+    CHECK(f.talks.empty());
+    // The next audience waits eight turns.
+    f.ai_play(1);
+    CHECK(f.talks.empty());
+    // The player's own proposals.
+    Game p = flat_game();
+    town(p, 0, 10, 10, 3, "Calm");
+    town(p, 1, 20, 10, 3, "Calm too");
+    p.declare_war(0, 1);
+    bool yes = false;
+    p.propose(0, 1, Proposal::Ceasefire, &yes);
+    CHECK(yes);
+    CHECK(p.treaty(0, 1) == Treaty::Ceasefire);
+    p.propose(0, 1, Proposal::Peace, &yes);
+    CHECK(!yes);   // once a turn
+    p.end_turn();
+    p.talks.clear();
+    p.propose(0, 1, Proposal::Peace, &yes);
+    CHECK(yes);
+    CHECK(p.treaty(0, 1) == Treaty::Peace);
+}
+
+static void test_ai_peace()
+{
+    // Computer rulers make and break treaties among themselves.
+    GameSettings s;
+    s.seed = 5;
+    s.civs = 7;
+    s.all_ai = true;
+    s.difficulty = Difficulty::King;
+    Game g = Game::create(s);
+    int peace_seen = 0, war_seen = 0;
+    for (int t = 0; t < 160; ++t) {
+        g.end_turn();
+        for (int a = 0; a < 7; ++a)
+            for (int b = a + 1; b < 7; ++b) {
+                peace_seen += g.treaty(a, b) == Treaty::Peace;
+                war_seen += g.treaty(a, b) == Treaty::War;
+            }
+    }
+    CHECK(peace_seen > 0);
+    CHECK(war_seen > 0);
+}
+
+static void test_civil_war()
+{
+    Game g = flat_game(Terrain::Grassland, 3);
+    g.civs[1].ai = true;
+    g.civs[1].tribe = 0;   // Romans: the Russians break away
+    g.civs[1].gold = 400;
+    // Six Roman cities in a row, the capital at the west end.
+    const int xs[] = {10, 16, 22, 28, 34, 40};
+    for (int i = 0; i < 6; ++i) town(g, 1, xs[i], 20, 6, "Roma");
+    CHECK(g.city_at(10, 20)->has(Building::Palace));
+    // The rest of the world is weak; we are weaker still.
+    for (City &c : g.cities) c.owner = 1;
+    g.civs[2].alive = false;   // a free place for the rebels
+    for (Unit &u : g.units) u.owner = 1;
+    g.declare_war(0, 1);
+    const int a = place(g, 0, UnitType::Armor, 9, 20);
+    const int rebels_in = place(g, 1, UnitType::Phalanx, 40, 20);
+    g.move(a, 1, 0);
+    CHECK(g.city_at(10, 20)->owner == 0);
+    CHECK_EQ(g.civil_wars, 1);
+    const int r = g.city_at(40, 20)->owner;
+    CHECK(r == 2);
+    CHECK(g.civs[r].alive);
+    CHECK(g.civs[r].name == "Russians");
+    CHECK(g.civs[r].leader == "Stalin");
+    CHECK(g.city_at(40, 20)->has(Building::Palace));
+    CHECK(g.civs[r].gold > 0 && std::abs(g.civs[r].gold - g.civs[1].gold) <= 1);   // the treasury split
+    CHECK(g.at_war(r, 1));
+    CHECK(g.civs[r].techs == g.civs[1].techs);
+    CHECK(g.unit(rebels_in)->owner == r);
+    CHECK(g.city_at(16, 20)->owner == 1);
+    // A third of the people go: 5 cities of 6 left (size 30), rebels hold
+    // at least 10.
+    int rebel_pop = 0;
+    for (const City &c : g.cities) rebel_pop += c.owner == r ? c.size : 0;
+    CHECK(rebel_pop * 3 >= 30);
+    CHECK(said(g, "Civil war"));
+    // No civil war for a small people: the Palace moves instead.
+    Game h = flat_game(Terrain::Grassland, 3);
+    for (int i = 0; i < 3; ++i) town(h, 1, xs[i], 20, 6, "Roma");
+    for (City &c : h.cities) c.owner = 1;
+    for (Unit &u : h.units) u.owner = 1;
+    h.civs[1].ai = true;
+    h.declare_war(0, 1);
+    const int b = place(h, 0, UnitType::Armor, 9, 20);
+    h.move(b, 1, 0);
+    CHECK_EQ(h.civil_wars, 0);
+    CHECK(h.city_at(22, 20)->has(Building::Palace));
+}
+
+// ---------------------------------------------------------------- C: tribes
+
+static void test_tribes()
+{
+    CHECK_EQ(kTribeCount, 14);
+    for (int t = 0; t < kTribeCount; ++t) {
+        const TribeInfo &i = tribe_info(t);
+        CHECK_EQ(tribe_info(tribe_pair(t)).slot, i.slot);
+        CHECK_EQ(tribe_pair(tribe_pair(t)), t);
+        CHECK_EQ(tribe_info(tribe_pair(t)).color, i.color);
+        CHECK(i.color != 1);   // red is the player's own
+    }
+    CHECK(std::string(tribe_info(0).leader) == "Caesar");
+    CHECK(std::string(tribe_info(tribe_pair(0)).name) == "Russians");
+    CHECK_EQ(tribe_info(13).mood, 1);    // Mongols aggressive
+    CHECK_EQ(tribe_info(6).mood, -1);    // Indians friendly
+    // A game started as the English: the Greeks never appear beside them,
+    // and no two peoples share a colour.
+    GameSettings s;
+    s.seed = 11;
+    s.civs = 7;
+    s.player_tribe = 12;
+    Game g = Game::create(s);
+    CHECK(g.civs[0].name == "English");
+    CHECK(g.civs[0].leader == "Elizabeth I");
+    for (int a = 0; a < 7; ++a) {
+        CHECK(g.civs[a].tribe >= 0);
+        if (a) CHECK(tribe_info(g.civs[a].tribe).slot != tribe_info(12).slot);
+        for (int b = a + 1; b < 7; ++b) CHECK(g.civs[a].color != g.civs[b].color);
+    }
+    // City names come from the people's own list.
+    const int st = place(g, 0, UnitType::Settlers, g.units.front().x, g.units.front().y);
+    CHECK(g.suggest_city_name(0) == "London");
+    (void)st;
+    // Saved and loaded, the treaties and tribes stay.
+    g.make_peace(1, 2);
+    g.civs[3].vendetta = 5;
+    Game h;
+    CHECK(load_game(save_game(g), h));
+    CHECK_EQ(h.civs[0].tribe, 12);
+    CHECK(h.treaty(1, 2) == Treaty::Peace);
+    CHECK_EQ(h.civs[3].vendetta, 5);
+    CHECK(save_game(g) == save_game(h));
+}
+
 // ---------------------------------------------------------------- runner
 
 int main(int argc, char **argv)
@@ -498,6 +774,8 @@ int main(int argc, char **argv)
         {"anarchy_length", test_anarchy_length}, {"buy_cost", test_buy_cost}, {"sell", test_sell},
         {"barracks", test_barracks}, {"capture", test_capture}, {"nuke", test_nuke}, {"trireme", test_trireme},
         {"air_targets", test_air_targets}, {"orders", test_orders}, {"disasters", test_disasters},
+        {"treaties", test_treaties}, {"senate", test_senate}, {"tribute", test_tribute}, {"talks", test_talks},
+        {"ai_peace", test_ai_peace}, {"civil_war", test_civil_war}, {"tribes", test_tribes},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();
