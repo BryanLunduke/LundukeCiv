@@ -294,41 +294,7 @@ void Game::ai_city(City &c)
     pick(true, best_unit(false));
 }
 
-void Game::ai_diplomacy(int ci)
-{
-    Civ &me = civs[ci];
-    auto strength = [&](int k) {
-        int s = 0;
-        for (const Unit &u : units) {
-            if (u.owner == k && is_military(u.type)) s += unit_info(u.type).attack + unit_info(u.type).defense;
-        }
-        for (const City &c : cities) {
-            if (c.owner == k) s += c.size;
-        }
-        return s;
-    };
-    const int mine = strength(ci);
-    for (int k = 0; k < static_cast<int>(civs.size()); ++k) {
-        if (k == ci || !civs[k].alive || civs[k].barbarian || !((me.contact >> k) & 1u)) continue;
-        if (at_war(ci, k)) {
-            // Tired of a war that goes nowhere; the Great Wall and the
-            // United Nations bring offers of peace much sooner.
-            const bool wall = wonder_active(k, Wonder::GreatWall) || wonder_active(k, Wonder::UnitedNations);
-            if ((turn % 16 == 0 && rng.chance(0.15)) || (wall && rng.chance(0.2))) {
-                make_peace(ci, k);
-                say(ci, MsgKind::Good, "Peace with the " + civs[k].name + ".");
-                say(k, MsgKind::Good, "The " + me.name + " agree to peace.");
-            }
-            continue;
-        }
-        if (turn < 50) continue;
-        const int theirs = std::max(1, strength(k));
-        double p = 0.01 + 0.006 * static_cast<int>(difficulty);
-        if (mine > theirs * 3 / 2) p *= 3;
-        if (mine < theirs) p *= 0.3;
-        if (rng.chance(p)) declare_war(ci, k);
-    }
-}
+// ai_diplomacy: see diplomacy.cpp.
 
 bool Game::ai_settler(Unit &u)
 {
@@ -673,9 +639,11 @@ void Game::ai_unit(Unit &start)
             move(id, ax, ay);
             continue;
         }
-        // March on the nearest enemy city we know of.
+        // March on the nearest enemy city we know of. Units as strong in
+        // defence as in attack (Militia, Musketeers, Mech. Inf.) are
+        // defenders, as in the DOS game, and stay home.
         int tx = -1, ty = -1, td = 1 << 30;
-        if (info.attack >= info.defense) {
+        if (info.attack > info.defense) {
             const int cont = map.at(u->x, u->y).continent;
             for (const City &c : cities) {
                 if (!at_war(ci, c.owner)) continue;

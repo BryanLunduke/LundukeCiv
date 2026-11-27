@@ -3,9 +3,12 @@
 // See COPYING and NOTICE.
 
 // Dialogs: new game, city screen, production, science, rates, revolution,
-// saves, advisors, the unit Civilopedia, combat and news reports.
+// saves, advisors, audiences with foreign leaders, the Databank, combat and
+// news reports.
 
 #include "app.hpp"
+
+#include "databank.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -97,6 +100,12 @@ void App::draw_dialog(cairo_t *cr, Dialog &d)
     case DialogKind::Spaceship: draw_spaceship(cr, d); break;
     case DialogKind::DiplomatMenu: draw_diplomat_menu(cr, d); break;
     case DialogKind::CaravanMenu: draw_caravan_menu(cr, d); break;
+    case DialogKind::ConfirmSell: draw_confirm_sell(cr, d); break;
+    case DialogKind::Talk: draw_talk(cr, d); break;
+    case DialogKind::Audience: draw_audience(cr, d); break;
+    case DialogKind::Databank: draw_databank(cr, d); break;
+    case DialogKind::CustomWorld: draw_custom_world(cr, d); break;
+    case DialogKind::Nuke: draw_nuke(cr, d); break;
     default: break;
     }
 }
@@ -120,60 +129,137 @@ static void field(cairo_t *cr, double x, double y, double w, const std::string &
 
 void App::draw_new_game(cairo_t *cr, Dialog &d)
 {
-    const double w = 640, h = 516, x = (geo_.win_w - w) / 2, y = game_ ? (geo_.win_h - h) / 2 : std::max(90.0, (geo_.win_h - 152 - h) / 2 + 40);
+    const double w = std::min(860, geo_.win_w - 16), h = std::min(700.0, geo_.win_h - 70.0);
+    const double x = (geo_.win_w - w) / 2, y = game_ ? (geo_.win_h - h) / 2 : std::max(54.0, (geo_.win_h - h) / 2 + 20);
     double cy = dialog_frame(cr, x, y, w, h, d.title);
     const double L = x + 24, R = x + w - 24;
+    const bool roomy = h >= 680;
     section(cr, "DIFFICULTY", L, cy, R);
     cy += 20;
     for (int i = 0; i < static_cast<int>(Difficulty::Count); ++i) {
         const double bw = (R - L - 4 * 8) / 5, bx = L + i * (bw + 8);
         const bool chosen = static_cast<int>(settings.difficulty) == i;
-        wide_button(cr, bx, cy, bw, 34, difficulty_name(static_cast<Difficulty>(i)), "", chosen, hover(bx, cy, bw, 34));
-        hot(bx, cy, bw, 34, [this, i] { settings.difficulty = static_cast<Difficulty>(i); });
+        wide_button(cr, bx, cy, bw, 32, difficulty_name(static_cast<Difficulty>(i)), "", chosen, hover(bx, cy, bw, 32));
+        hot(bx, cy, bw, 32, [this, i] { settings.difficulty = static_cast<Difficulty>(i); });
     }
-    cy += 44;
+    cy += 38;
     const std::string level_note = "Content citizens per city: " + std::to_string(content_base(settings.difficulty)) +
                                    ". Research costs rise faster on harder levels.";
-    text(cr, kUiFont, level_note, L, cy, kSlateDim, 1.0, static_cast<int>(R - L));
-    cy += std::max(34.0, static_cast<double>(measure(cr, kUiFont, level_note, static_cast<int>(R - L)).h) + 12);
+    text(cr, kTagFont, level_note, L, cy, kSlateDim);
+    cy += roomy ? 26 : 20;
     section(cr, "CIVILIZATIONS IN THE WORLD", L, cy, R);
     cy += 20;
     for (int n = 2; n <= 7; ++n) {
-        const double bw = 64, bx = L + (n - 2) * (bw + 8);
-        wide_button(cr, bx, cy, bw, 34, std::to_string(n), "", settings.civs == n, hover(bx, cy, bw, 34));
-        hot(bx, cy, bw, 34, [this, n] { settings.civs = n; });
+        const double bw = 60, bx = L + (n - 2) * (bw + 8);
+        wide_button(cr, bx, cy, bw, 32, std::to_string(n), "", settings.civs == n, hover(bx, cy, bw, 32));
+        hot(bx, cy, bw, 32, [this, n] { settings.civs = n; });
     }
-    cy += 50;
+    cy += roomy ? 46 : 40;
     section(cr, "YOUR PEOPLE", L, cy, R);
     cy += 20;
+    // The fourteen peoples, two to a colour, and one of your own making.
+    const double tw = (R - L - 6 * 6) / 7, th = 34;
+    for (int t = 0; t < kTribeCount; ++t) {
+        const TribeInfo &ti = tribe_info(t);
+        const double bx = L + ti.slot * (tw + 6), by = cy + (t / kTribeSlots) * (th + 6);
+        const bool chosen = settings.player_tribe == t;
+        const bool lit = hover(bx, by, tw, th);
+        round_rect(cr, bx, by, tw, th, 5);
+        set(cr, chosen ? kSlateGoldDim : (lit ? kSlateEdge : kSlatePanel));
+        cairo_fill(cr);
+        round_rect(cr, bx + 6, by + 9, 16, 16, 3);
+        set_argb(cr, civ_colors(ti.color).main);
+        cairo_fill(cr);
+        text(cr, kSmallBold, ti.name, bx + 28, by + 9, chosen ? kSlateDeep : kSlateInk);
+        hot(bx, by, tw, th, [this, t] {
+            settings.player_tribe = t;
+            if (new_game_field_ < 2) new_game_field_ = 2;
+        });
+    }
+    cy += 2 * (th + 6);
+    {
+        const bool chosen = settings.player_tribe < 0;
+        const double bw = 210;
+        wide_button(cr, L, cy, bw, 32, "A people of your own", "", chosen, hover(L, cy, bw, 32));
+        hot(L, cy, bw, 32, [this] {
+            settings.player_tribe = -1;
+            new_game_field_ = 0;
+        });
+        if (!chosen) {
+            const TribeInfo &ti = tribe_info(settings.player_tribe);
+            const std::string lean = std::string(ti.leader) + " of the " + ti.name + " \u00b7 " + mood_name(ti.mood) + ", " + policy_name(ti.policy) +
+                                     ", " + ideology_name(ti.ideology);
+            text(cr, kBoldFont, lean, L + bw + 16, cy + 6, kSlateGold);
+        }
+    }
+    cy += 42;
     const double half = (R - L - 16) / 2;
-    text(cr, kTagFont, "NAME OF YOUR PEOPLE", L, cy, kSlateDim);
-    text(cr, kTagFont, "YOUR NAME AS LEADER", L + half + 16, cy, kSlateDim);
-    cy += 16;
-    field(cr, L, cy, half, settings.player_name, new_game_field_ == 0, blink_);
-    hot(L, cy, half, 34, [this] { new_game_field_ = 0; });
-    field(cr, L + half + 16, cy, half, settings.player_leader, new_game_field_ == 1, blink_);
-    hot(L + half + 16, cy, half, 34, [this] { new_game_field_ = 1; });
-    cy += 48;
-    text(cr, kTagFont, "COLOR", L, cy, kSlateDim);
-    text(cr, kTagFont, "WORLD SEED", L + half + 16, cy, kSlateDim);
-    cy += 16;
-    for (int c = 0; c < 8; ++c) {
-        const double sx = L + c * 34;
-        round_rect(cr, sx, cy + 3, 28, 28, 5);
-        set_argb(cr, civ_colors(c).main);
-        cairo_fill_preserve(cr);
-        set(cr, settings.player_color == c ? kSlateGold : kSlateDeep);
-        cairo_set_line_width(cr, settings.player_color == c ? 3 : 1);
-        cairo_stroke(cr);
-        hot(sx, cy + 3, 28, 28, [this, c] { settings.player_color = c; });
+    if (settings.player_tribe < 0) {
+        text(cr, kTagFont, "NAME OF YOUR PEOPLE", L, cy, kSlateDim);
+        text(cr, kTagFont, "YOUR NAME AS LEADER", L + half + 16, cy, kSlateDim);
+        cy += 19;
+        field(cr, L, cy, half, settings.player_name, new_game_field_ == 0, blink_);
+        hot(L, cy, half, 34, [this] { new_game_field_ = 0; });
+        field(cr, L + half + 16, cy, half, settings.player_leader, new_game_field_ == 1, blink_);
+        hot(L + half + 16, cy, half, 34, [this] { new_game_field_ = 1; });
+        cy += 42;
+        for (int c = 0; c < 8; ++c) {
+            const double sx = L + c * 34;
+            round_rect(cr, sx, cy, 28, 28, 5);
+            set_argb(cr, civ_colors(c).main);
+            cairo_fill_preserve(cr);
+            set(cr, settings.player_color == c ? kSlateGold : kSlateDeep);
+            cairo_set_line_width(cr, settings.player_color == c ? 3 : 1);
+            cairo_stroke(cr);
+            hot(sx, cy, 28, 28, [this, c] { settings.player_color = c; });
+        }
+        text(cr, kTagFont, "COLOR: the people of that colour stay out of the game.", L + 8 * 34 + 8, cy + 8, kSlateDim);
+        cy += 38;
+    } else {
+        // Portrait and leanings of the chosen people's leader.
+        const TribeInfo &ti = tribe_info(settings.player_tribe);
+        round_rect(cr, L - 3, cy - 3, 70, 70, 5);
+        set(cr, kSlateGoldDim);
+        cairo_fill(cr);
+        paint_pixmap(cr, art::leader_portrait(settings.player_tribe, civ_colors(ti.color), 1), L, cy, 2);
+        const std::string facts = std::string("Cities: ") + ti.cities[0] + ", " + ti.cities[1] + ", " + ti.cities[2] + "\u2026  \u00b7  Paired with the " +
+                                  tribe_info(tribe_pair(settings.player_tribe)).name + ", who share their colour.";
+        text(cr, kUiFont, facts, L + 82, cy + 6, kSlateInk, 1.0, static_cast<int>(R - L - 82));
+        cy += 80;
+    }
+    section(cr, "WORLD", L, cy, L + half);
+    section(cr, "WORLD SEED", L + half + 16, cy, R);
+    cy += 20;
+    const char *worlds[3] = {"Random", "Earth", "Customize..."};
+    const double ww = (half - 16) / 3;
+    for (int i = 0; i < 3; ++i) {
+        const double bx = L + i * (ww + 8);
+        wide_button(cr, bx, cy, ww, 34, worlds[i], "", world_choice_ == i, hover(bx, cy, ww, 34));
+        hot(bx, cy, ww, 34, [this, i] {
+            if (i == 2) {
+                Dialog c;
+                c.kind = DialogKind::CustomWorld;
+                c.title = "Customize World";
+                open(c);
+            } else {
+                world_choice_ = i;
+            }
+        });
     }
     field(cr, L + half + 16, cy, half, seed_text_, new_game_field_ == 2, blink_);
     hot(L + half + 16, cy, half, 34, [this] { new_game_field_ = 2; });
-    cy += 52;
-    text(cr, kUiFont, "Tab moves between fields. The other peoples are drawn from history.", L, cy, kSlateDim, 1.0,
-         static_cast<int>(R - L));
-    const double by = y + h - 56;
+    cy += 40;
+    if (world_choice_ == 2) {
+        static const char *t3[] = {"Cool", "Temperate", "Warm"}, *c3[] = {"Arid", "Normal", "Wet"}, *a3[] = {"3", "4", "5"};
+        const std::string land = settings.land_pct <= 24 ? "Small" : (settings.land_pct >= 40 ? "Large" : "Normal");
+        text(cr, kTagFont,
+             "Land " + land + " \u00b7 " + t3[std::clamp(settings.temperature, 0, 2)] + " \u00b7 " + c3[std::clamp(settings.climate, 0, 2)] +
+                 " \u00b7 " + a3[std::clamp(settings.age, 0, 2)] + " billion years",
+             L, cy, kSlateDim);
+    } else if (world_choice_ == 1) {
+        text(cr, kTagFont, "The continents of the Earth; the seed still sets the starting places.", L, cy, kSlateDim);
+    }
+    const double by = y + h - 54;
     const bool can_cancel = game_ != nullptr;
     wide_button(cr, R - 180, by, 180, 38, "Start", "Enter", true, hover(R - 180, by, 180, 38));
     hot(R - 180, by, 180, 38, [this] {
@@ -375,6 +461,16 @@ void App::draw_city(cairo_t *cr, Dialog &d)
         if (s.disorder) {
             text(cr, kBoldFont, "CIVIL DISORDER: no production or taxes!", L, cy, kSlateBad);
             cy += 20;
+        } else if (c.celebrating) {
+            const Government gv = g().civs[c.owner].govt;
+            const bool grows = gv == Government::Republic || gv == Government::Democracy;
+            text(cr, kBoldFont, std::string("\u2605 We Love the ") + g().leader_title(c.owner) + " Day!", L, cy, kSlateGold);
+            cy += 20;
+            const std::string why = grows ? "+1 trade on worked squares with trade; the city grows each turn it has spare food."
+                                          : (gv == Government::Monarchy || gv == Government::Communism ? "+1 trade on worked squares with trade."
+                                                                                                        : "No despotic -1 on rich squares.");
+            text(cr, kTagFont, why, L, cy, kSlateDim, 1.0, static_cast<int>(lw));
+            cy += measure(cr, kTagFont, why, static_cast<int>(lw)).h + 4;
         }
     }
     cy += 8;
@@ -605,7 +701,17 @@ void App::draw_city(cairo_t *cr, Dialog &d)
         wide_button(cr, rx + bw + 8, ry, bw, 34, price > 0 ? "Buy " + with_commas(price) + "g" : "Buy", "B", false,
                     hover(rx + bw + 8, ry, bw, 34), can_buy);
         if (can_buy && !ro) hot(rx + bw + 8, ry, bw, 34, [this, cid] { g().buy(cid); });
-        ry += 48;
+        ry += 38;
+        if (price > 0) {
+            // How the price comes about (the DOS formula).
+            const int r = std::clamp(cost - c.shields, 0, 999);
+            std::string how = c.build_unit ? std::to_string(r) + "\u00b2/20 + 2\u00d7" + std::to_string(r)
+                                           : (wonder ? "4\u00d7" : "2\u00d7") + std::to_string(r);
+            how += " shields left";
+            if (c.shields == 0) how += ", \u00d72 from scratch";
+            text(cr, kTagFont, "Buy: " + how + (c.bought ? " \u00b7 bought this turn" : ""), rx + 2, ry, kSlateDim);
+        }
+        ry += 18;
     }
     section(cr, "IMPROVEMENTS", rx, ry, rr);
     ry += 20;
@@ -615,8 +721,27 @@ void App::draw_city(cairo_t *cr, Dialog &d)
             if (!c.has(static_cast<Building>(b))) continue;
             if (ry > y + h - 80) break;
             text(cr, kUiFont, building_info(b).name, rx + 4, ry, kSlateInk);
-            if (building_info(b).upkeep) text_right(cr, kTagFont, std::to_string(building_info(b).upkeep) + "g", rr, ry + 3, kSlateDim);
-            ry += 20;
+            const int up = g().building_upkeep(c.owner, b);
+            const bool sell = !ro && c.owner == human() && g().can_sell(c, b);
+            if (up) text_right(cr, kTagFont, std::to_string(up) + "g", sell || (c.sold && b != 0) ? rr - 86 : rr, ry + 3, kSlateDim);
+            if (sell) {
+                const std::string lab = "Sell " + with_commas(building_info(b).cost) + "g";
+                const bool lit = hover(rr - 78, ry - 2, 78, 22);
+                round_rect(cr, rr - 78, ry - 2, 78, 22, 4);
+                set(cr, lit ? kSlateGoldDim : kSlateDeep);
+                cairo_fill(cr);
+                text_center(cr, kTagFont, lab, rr - 39, ry + 2, lit ? kSlateDeep : kSlateGold);
+                const int cid2 = c.id;
+                hot(rr - 78, ry - 2, 78, 22, [this, cid2, b] {
+                    Dialog q;
+                    q.kind = DialogKind::ConfirmSell;
+                    q.title = "Sell Improvement";
+                    q.city_id = cid2;
+                    q.other = b;
+                    open(q);
+                });
+            }
+            ry += 22;
             ++n;
         }
         for (int wv = 0; wv < kWonderCount; ++wv) {
@@ -630,6 +755,7 @@ void App::draw_city(cairo_t *cr, Dialog &d)
             ++n;
         }
         if (!n) text(cr, kUiFont, "None yet.", rx + 4, ry, kSlateDim);
+        if (c.sold && !ro) text(cr, kTagFont, "An improvement was sold here this turn.", rx + 4, ry + 2, kSlateDim);
     }
     const double bx = x + w - 20 - 160, by = y + h - 54;
     wide_button(cr, bx, by, 160, 38, "Close", "Esc", true, hover(bx, by, 160, 38));
@@ -880,7 +1006,7 @@ void App::draw_rates(cairo_t *cr, Dialog &d)
             sci += ct.stats.sci;
         }
         for (int b = 0; b < kBuildingCount; ++b) {
-            if (ct.has(static_cast<Building>(b))) upkeep += building_info(b).upkeep;
+            if (ct.has(static_cast<Building>(b))) upkeep += g().building_upkeep(me, b);
         }
     }
     cy += 6;
@@ -1065,7 +1191,7 @@ void App::draw_foreign(cairo_t *cr, Dialog &d)
         int ncity = 0;
         for (const City &ct : g().cities) ncity += ct.owner == k;
         text(cr, kBoldFont, met ? "The " + c.name + " \u00b7 " + c.leader : "Unknown people", L + 50, cy + 8, kSlateInk);
-        std::string status = !c.alive ? "Destroyed" : (!met ? "Not yet met" : (g().at_war(me, k) ? "At war" : "At peace"));
+        std::string status = !c.alive ? "Destroyed" : (!met ? "Not yet met" : treaty_name(g().treaty(me, k)));
         if (met && c.alive) status += " \u00b7 " + std::to_string(ncity) + " cities \u00b7 " + government_info(c.govt).name;
         const bool embassy = (g().civs[me].embassy >> k) & 1u;
         if (met && c.alive && embassy) {
@@ -1077,32 +1203,22 @@ void App::draw_foreign(cairo_t *cr, Dialog &d)
         }
         text(cr, kUiFont, status, L + 50, cy + 30, g().at_war(me, k) ? kSlateBad : kSlateDim);
         if (met && c.alive) {
-            const bool war = g().at_war(me, k);
             const double bx = R - 170;
-            wide_button(cr, bx, cy + 10, 160, 36, war ? "Propose Peace" : "Declare War", "", false, hover(bx, cy + 10, 160, 36));
-            hot(bx, cy + 10, 160, 36, [this, me, k, war] {
-                if (war) {
-                    // They accept peace when the war goes badly for them, or now and then.
-                    int mine = 0, theirs = 0;
-                    for (const Unit &u : g().units) {
-                        if (u.owner == me) mine += unit_info(u.type).attack;
-                        if (u.owner == k) theirs += unit_info(u.type).attack;
-                    }
-                    const bool wall = g().wonder_active(me, Wonder::GreatWall) || g().wonder_active(me, Wonder::UnitedNations);
-                    if (wall || mine > theirs || g().rng.chance(0.3)) {
-                        g().make_peace(me, k);
-                        message("Peace", {"The " + g().civs[k].name + " accept peace."});
-                    } else {
-                        message("Refused", {"The " + g().civs[k].name + " laugh at your offer of peace."});
-                    }
-                } else {
-                    g().declare_war(me, k);
-                    collect_news(false);
-                }
+            wide_button(cr, bx, cy + 10, 160, 36, "Talk", "", false, hover(bx, cy + 10, 160, 36));
+            hot(bx, cy + 10, 160, 36, [this, k] {
+                Dialog a;
+                a.kind = DialogKind::Audience;
+                a.title = "Audience";
+                a.other = k;
+                a.lines = {g().leader_greeting(k) + " receives your envoy."};
+                open(a);
             });
         }
         cy += 64;
     }
+    if (g().senate(me))
+        text(cr, kUiFont, "Your Senate accepts every offer of peace, and will not let you break a treaty.", L, y + h - 46, kSlateDim, 1.0,
+             static_cast<int>(R - L - 160));
     const double bx = R - 140, by = y + h - 54;
     wide_button(cr, bx, by, 140, 38, "Close", "Esc", true, hover(bx, by, 140, 38));
     hot(bx, by, 140, 38, [this] { close_top(); });
@@ -1202,11 +1318,12 @@ void App::draw_help(cairo_t *cr, Dialog &d)
         {"G", "Go to a square (then click it)"},
         {"W  Space  N", "Wait, skip this turn, next unit"},
         {"Shift+D", "Disband"},
+        {"Shift+P  Shift+H  U", "Pillage, make this city home, unload a ship"},
         {"Enter", "End the turn"},
         {"C  H", "Center on the unit, on the capital"},
         {"+  -  wheel", "Zoom"},
         {"T  A  V", "Tax rates, science, cities"},
-        {"O  Y", "Wonders, spaceship"},
+        {"O  Y  E", "Wonders, spaceship, Databank"},
         {"Ctrl+S  Ctrl+L", "Save, load"},
         {"Click", "Select a unit, open a city, move next door"},
         {"Right click", "Center the map there"},
@@ -1630,6 +1747,298 @@ void App::launch_spaceship()
     const int me = human();
     if (!g().launch(me)) return;
     collect_news(false);
+}
+
+
+// ---------------------------------------------------------------- M4 dialogs
+
+void App::draw_confirm_sell(cairo_t *cr, Dialog &d)
+{
+    const City *c = g().city(d.city_id);
+    if (!c || d.other < 0) {
+        close_top();
+        return;
+    }
+    const double w = 560, h = 220, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, d.title);
+    const BuildingInfo &b = building_info(d.other);
+    text(cr, kUiFont,
+         std::string("Sell the ") + b.name + " in " + c->name + " for " + with_commas(b.cost) + " gold? A city may sell one improvement a turn.",
+         x + 24, cy, kSlateInk, 1.0, static_cast<int>(w - 48));
+    const double bx = x + w - 24 - 160, by = y + h - 54;
+    wide_button(cr, bx, by, 160, 38, "Sell", "Enter", true, hover(bx, by, 160, 38));
+    hot(bx, by, 160, 38, [this] {
+        KeyEvent k;
+        k.key = Key::Enter;
+        key(k);
+    });
+    wide_button(cr, bx - 170, by, 160, 38, "Keep It", "Esc", false, hover(bx - 170, by, 160, 38));
+    hot(bx - 170, by, 160, 38, [this] { close_top(); });
+}
+
+// The leader's portrait in a gilt frame.
+static void portrait(cairo_t *cr, const Game &g, int civ, int mood, double x, double y, int scale)
+{
+    const Civ &c = g.civs[civ];
+    round_rect(cr, x - 6, y - 6, 32 * scale + 12, 32 * scale + 12, 6);
+    set(cr, kSlateGoldDim);
+    cairo_fill(cr);
+    paint_pixmap(cr, art::leader_portrait(c.tribe, civ_colors(c.color), mood), x, y, scale);
+}
+
+void App::draw_talk(cairo_t *cr, Dialog &d)
+{
+    if (g().talks.empty()) {
+        dialogs_.pop_back();
+        return;
+    }
+    const Talk &t = g().talks.front();
+    const bool choice = talk_has_choice(t);
+    const bool angry = t.kind == TalkKind::Tribute || t.kind == TalkKind::TechDemand || t.kind == TalkKind::WarDeclared ||
+                       t.kind == TalkKind::TreatyCancelled || t.kind == TalkKind::CeasefireOver;
+    const double w = std::min(860, geo_.win_w - 20), h = 420, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, "Audience with the " + g().civs[t.from].name);
+    const int scale = 6;
+    portrait(cr, g(), t.from, angry ? -1 : (t.kind == TalkKind::Greeting || t.kind == TalkKind::Embassy ? 1 : 0), x + 30, cy + 6, scale);
+    const double tx = x + 30 + 32 * scale + 30, tw = x + w - 24 - tx;
+    text(cr, kBoldFont, g().leader_greeting(t.from), tx, cy + 4, kSlateGold);
+    const Civ &them = g().civs[t.from];
+    std::string sub = treaty_name(g().treaty(human(), t.from));
+    if (them.tribe >= 0) {
+        const TribeInfo &ti = tribe_info(them.tribe);
+        sub += std::string(" \u00b7 ") + mood_name(ti.mood) + ", " + policy_name(ti.policy) + ", " + ideology_name(ti.ideology);
+    }
+    text(cr, kTagFont, sub, tx, cy + 28, kSlateDim);
+    text(cr, kUiFont, "\u201c" + t.text + "\u201d", tx, cy + 56, kSlateInk, 1.0, static_cast<int>(tw));
+    if (t.forced) text(cr, kBoldFont, "The Senate has spoken.", tx, cy + 210, kSlateGoldDim);
+    int left = 0;
+    for (const Dialog &o : dialogs_) left += o.kind == DialogKind::Talk;
+    if (left > 1) text(cr, kTagFont, std::to_string(left - 1) + " more waiting", x + 24, y + h - 46, kSlateDim);
+    const double bw = 220, by = y + h - 56, bx = x + w - 24 - bw;
+    if (choice) {
+        std::string yes = "Accept", no = "Refuse";
+        switch (t.kind) {
+        case TalkKind::Tribute: yes = "Pay " + with_commas(t.gold) + " gold"; break;
+        case TalkKind::TechDemand: yes = std::string("Give ") + advance_info(t.tech).name; break;
+        case TalkKind::Ceasefire: yes = "Agree to cease-fire"; no = "Fight on"; break;
+        case TalkKind::Peace: yes = "Sign the treaty"; no = "Decline"; break;
+        case TalkKind::TechForPeace: yes = "Make peace"; no = "Decline"; break;
+        case TalkKind::Embassy: yes = "Exchange embassies"; no = "Decline"; break;
+        default: break;
+        }
+        wide_button(cr, bx, by, bw, 38, yes, "Y", true, hover(bx, by, bw, 38));
+        hot(bx, by, bw, 38, [this] { answer_talk(true); });
+        wide_button(cr, bx - bw - 10, by, bw, 38, no, "N", false, hover(bx - bw - 10, by, bw, 38));
+        hot(bx - bw - 10, by, bw, 38, [this] { answer_talk(false); });
+    } else {
+        wide_button(cr, bx, by, bw, 38, "OK", "Enter", true, hover(bx, by, bw, 38));
+        hot(bx, by, bw, 38, [this] { answer_talk(true); });
+    }
+    (void)d;
+}
+
+void App::draw_audience(cairo_t *cr, Dialog &d)
+{
+    const int k = d.other;
+    if (k < 0 || k >= static_cast<int>(g().civs.size())) {
+        close_top();
+        return;
+    }
+    const int me = human();
+    const Treaty tr = g().treaty(me, k);
+    const double w = std::min(860, geo_.win_w - 20), h = 440, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, "Audience with the " + g().civs[k].name);
+    const int scale = 6;
+    const Attitude at = g().attitude(k, me);
+    portrait(cr, g(), k, at.hostile ? -1 : (d.view_only ? 1 : 0), x + 30, cy + 6, scale);
+    const double tx = x + 30 + 32 * scale + 30, tw = x + w - 24 - tx;
+    text(cr, kBoldFont, g().leader_greeting(k), tx, cy + 4, kSlateGold);
+    std::string sub = std::string("Relations: ") + treaty_name(tr);
+    if (tr == Treaty::Ceasefire) sub += " (ends " + year_text(year_for_turn(g().civs[me].ceasefire_end[k])) + ")";
+    if ((g().civs[k].vendetta >> me) & 1u) sub += " \u00b7 they bear a grudge";
+    text(cr, kTagFont, sub, tx, cy + 28, kSlateDim);
+    double ly = cy + 56;
+    for (const std::string &l : d.lines) {
+        text(cr, kUiFont, l, tx, ly, kSlateInk, 1.0, static_cast<int>(tw));
+        ly += measure(cr, kUiFont, l, static_cast<int>(tw)).h + 8;
+    }
+    struct Opt {
+        Proposal p;
+        std::string label;
+        bool ok;
+    };
+    const bool embassy = ((g().civs[me].embassy >> k) & 1u) && ((g().civs[k].embassy >> me) & 1u);
+    const Opt opts[4] = {
+        {Proposal::Ceasefire, "Propose cease-fire", tr == Treaty::War},
+        {Proposal::Peace, "Propose peace", tr == Treaty::Ceasefire || tr == Treaty::None},
+        {Proposal::Embassy, "Exchange embassies", !embassy},
+        {Proposal::CancelTreaty, g().senate(me) ? "Cancel treaty (Senate)" : "Cancel treaty", tr == Treaty::Ceasefire || tr == Treaty::Peace},
+    };
+    double oy = cy + 216;
+    const double ow = (tw - 10) / 2;
+    for (int i = 0; i < 4; ++i) {
+        const double ox = tx + (i % 2) * (ow + 10), yy = oy + (i / 2) * 46;
+        wide_button(cr, ox, yy, ow, 38, opts[i].label, std::to_string(i + 1), false, hover(ox, yy, ow, 38), opts[i].ok);
+        const Proposal p = opts[i].p;
+        if (opts[i].ok) hot(ox, yy, ow, 38, [this, k, p] { audience(k, p); });
+    }
+    const double bx = x + w - 24 - 160, by = y + h - 54;
+    wide_button(cr, bx, by, 160, 38, "Farewell", "Esc", true, hover(bx, by, 160, 38));
+    hot(bx, by, 160, 38, [this] {
+        close_top();
+        collect_news(false);
+    });
+}
+
+void App::draw_databank(cairo_t *cr, Dialog &d)
+{
+    const DatabankTopic topic = static_cast<DatabankTopic>(d.other);
+    const std::vector<DatabankEntry> entries = databank(topic);
+    if (entries.empty()) {
+        close_top();
+        return;
+    }
+    d.scroll = std::clamp(d.scroll, 0, static_cast<int>(entries.size()) - 1);
+    const double w = std::min(1040, geo_.win_w - 16), h = std::min(720, geo_.win_h - 16);
+    const double x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, std::string("Databank: ") + databank_topic_name(topic));
+    // Topic tabs.
+    const int nt = static_cast<int>(DatabankTopic::Count);
+    const double tabw = (w - 48 - (nt - 1) * 6) / nt;
+    for (int t = 0; t < nt; ++t) {
+        const double bx = x + 24 + t * (tabw + 6);
+        wide_button(cr, bx, cy, tabw, 32, databank_topic_name(static_cast<DatabankTopic>(t)), "", t == d.other, hover(bx, cy, tabw, 32));
+        hot(bx, cy, tabw, 32, [this, t] {
+            Dialog &top = dialogs_.back();
+            top.other = t;
+            top.scroll = 0;
+            top.dx = 0;
+        });
+    }
+    cy += 46;
+    // The list.
+    const double lw = 250, lx = x + 24, row = 26, bottom = y + h - 70;
+    const int fit = std::max(1, static_cast<int>((bottom - cy) / row));
+    if (d.scroll < d.dx) d.dx = d.scroll;
+    if (d.scroll >= d.dx + fit) d.dx = d.scroll - fit + 1;
+    d.dx = std::clamp(d.dx, 0, std::max(0, static_cast<int>(entries.size()) - fit));
+    round_rect(cr, lx, cy, lw, fit * row + 8, 6);
+    set(cr, kSlateDeep);
+    cairo_fill(cr);
+    for (int i = d.dx; i < static_cast<int>(entries.size()) && i < d.dx + fit; ++i) {
+        const double ry = cy + 4 + (i - d.dx) * row;
+        const bool sel = i == d.scroll;
+        if (sel) {
+            round_rect(cr, lx + 4, ry, lw - 8, row - 2, 4);
+            set(cr, kSlateGoldDim);
+            cairo_fill(cr);
+        } else if (hover(lx, ry, lw, row)) {
+            fill(cr, lx + 4, ry, lw - 8, row - 2, kSlatePanel);
+        }
+        text(cr, kUiFont, entries[static_cast<size_t>(i)].name, lx + 12, ry + 3, sel ? kSlateDeep : kSlateInk);
+        hot(lx, ry, lw, row, [this, i] { dialogs_.back().scroll = i; });
+    }
+    if (static_cast<int>(entries.size()) > fit)
+        text(cr, kTagFont, std::to_string(d.dx + 1) + "-" + std::to_string(std::min(static_cast<int>(entries.size()), d.dx + fit)) + " of " +
+                               std::to_string(entries.size()) + " \u00b7 Up/Down",
+             lx, cy + fit * row + 14, kSlateDim);
+    // The facts.
+    const DatabankEntry &e = entries[static_cast<size_t>(d.scroll)];
+    const double fx = lx + lw + 24, fw = x + w - 24 - fx;
+    double fy = cy;
+    const int color = game_ ? g().civs[human()].color : settings.player_color;
+    double head = 0;
+    if (topic == DatabankTopic::Units) {
+        for (int u = 0; u < kUnitTypeCount; ++u) {
+            if (e.name == unit_info(u).name) paint_pixmap(cr, art::unit_card(static_cast<UnitType>(u), civ_colors(color)), fx, fy, 2);
+        }
+        head = 72;
+    } else if (topic == DatabankTopic::Wonders) {
+        for (int wv = 0; wv < kWonderCount; ++wv) {
+            if (e.name == wonder_info(wv).name) paint_pixmap(cr, art::wonder_icon(wv), fx, fy, 2);
+        }
+        head = 72;
+    }
+    text(cr, kTitleFont, e.name, fx + (head ? 80 : 0), fy + (head ? 14 : 0), kSlateGold);
+    fy += head ? head : 44;
+    section(cr, "FACTS", fx, fy, fx + fw);
+    fy += 22;
+    for (const std::string &f : e.facts) {
+        if (fy > bottom) break;
+        fill(cr, fx + 2, fy + 8, 5, 5, kSlateGoldDim);
+        text(cr, kUiFont, f, fx + 16, fy, kSlateInk, 1.0, static_cast<int>(fw - 16));
+        fy += measure(cr, kUiFont, f, static_cast<int>(fw - 16)).h + 6;
+    }
+    text(cr, kTagFont, "Left/Right: topic \u00b7 Up/Down: entry", x + 24, y + h - 44, kSlateDim);
+    const double bx = x + w - 24 - 140, by = y + h - 54;
+    wide_button(cr, bx, by, 140, 38, "Close", "Esc", true, hover(bx, by, 140, 38));
+    hot(bx, by, 140, 38, [this] { close_top(); });
+}
+
+void App::draw_custom_world(cairo_t *cr, Dialog &d)
+{
+    const double w = 640, h = 430, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, d.title);
+    const double L = x + 24, R = x + w - 24;
+    struct Row {
+        const char *title;
+        const char *names[3];
+        int *value;
+        int values[3];
+    };
+    Row rows[4] = {
+        {"LAND MASS", {"Small", "Normal", "Large"}, &settings.land_pct, {24, 32, 40}},
+        {"TEMPERATURE", {"Cool", "Temperate", "Warm"}, &settings.temperature, {0, 1, 2}},
+        {"CLIMATE", {"Arid", "Normal", "Wet"}, &settings.climate, {0, 1, 2}},
+        {"AGE", {"3 billion years", "4 billion years", "5 billion years"}, &settings.age, {0, 1, 2}},
+    };
+    const double bw = (R - L - 16) / 3;
+    for (Row &r : rows) {
+        section(cr, r.title, L, cy, R);
+        cy += 20;
+        for (int i = 0; i < 3; ++i) {
+            const double bx = L + i * (bw + 8);
+            const bool chosen = *r.value == r.values[i];
+            wide_button(cr, bx, cy, bw, 34, r.names[i], "", chosen, hover(bx, cy, bw, 34));
+            int *v = r.value;
+            const int val = r.values[i];
+            hot(bx, cy, bw, 34, [v, val] { *v = val; });
+        }
+        cy += 48;
+    }
+    text(cr, kUiFont, "A young world is rugged with hills and mountains; an old one is worn smooth.", L, cy - 6, kSlateDim, 1.0,
+         static_cast<int>(R - L));
+    const double by = y + h - 56;
+    wide_button(cr, R - 180, by, 180, 38, "Done", "Enter", true, hover(R - 180, by, 180, 38));
+    hot(R - 180, by, 180, 38, [this] {
+        world_choice_ = 2;
+        close_top();
+    });
+}
+
+void App::draw_nuke(cairo_t *cr, Dialog &d)
+{
+    const double w = 700;
+    double body = 0;
+    for (const std::string &l : d.lines) body += measure(cr, kUiFont, l, static_cast<int>(w - 260)).h + 8;
+    const double h = std::max(330.0, 54 + body + 90), x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, d.title);
+    // A mushroom cloud, square by square.
+    static const std::vector<std::string> cloud = {
+        "......oooooo......", "....ooyyyyyyoo....", "...oyywwwwwyyyo...", "..oyywwwwwwwwyyo..", "..oyyyywwwwyyyyo..",
+        "...ooyyyyyyyyoo...", ".....oooyyooo.....", ".......oyyo.......", ".......oyyo.......", "......ooyyoo......",
+        ".......oyyo.......", "......oyyyyo......", "....ooyyyyyyoo....", "..ooyyyywwyyyyoo..", ".RRRRRRRRRRRRRRRR.",
+        "RRrrrrrrrrrrrrrrRR",
+    };
+    paint_pixmap(cr, art::sprite(cloud), x + 30, cy + 10, 11);
+    double ty = cy;
+    for (const std::string &l : d.lines) {
+        text(cr, kUiFont, l, x + 240, ty, kSlateInk, 1.0, static_cast<int>(w - 264));
+        ty += measure(cr, kUiFont, l, static_cast<int>(w - 264)).h + 8;
+    }
+    const double bx = x + w - 24 - 140, by = y + h - 56;
+    wide_button(cr, bx, by, 140, 38, "OK", "Enter", true, hover(bx, by, 140, 38));
+    hot(bx, by, 140, 38, [this] { close_top(); });
 }
 
 } // namespace ui

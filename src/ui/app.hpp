@@ -54,6 +54,12 @@ enum class DialogKind {
     None, NewGame, Message, Combat, City, Production, Science, Rates, Revolution, SaveLoad, CityName, Cities,
     Foreign, UnitSheet, ConfirmWar, GameOver, Report, Help, WonderBuilt, Wonders,
     DiplomatMenu, CaravanMenu, Spaceship,
+    ConfirmSell,   // other: the building
+    Talk,          // a foreign leader's audience: g().talks.front()
+    Audience,      // the player speaks to civ `other`
+    Databank,      // other: topic, scroll: entry, dx: list offset
+    CustomWorld,   // land, temperature, climate, age
+    Nuke,          // the blast, lines: what it did
 };
 
 struct Dialog {
@@ -128,6 +134,7 @@ private:
     std::string news_;
     int new_game_field_ = 0;  // 0 civ name, 1 leader, 2 seed
     std::string seed_text_;
+    int world_choice_ = 0;    // New Game: 0 random, 1 Earth, 2 customized
     std::string save_dir_;
     Geometry geo_;
     bool end_of_turn_prompt_ = false;
@@ -229,6 +236,16 @@ private:
     void diplomat_choose(int unit_id, int tx, int ty, civ::DiploAction a);
     void caravan_choose(int unit_id, int city_id, int choice);
     void draw_title(cairo_t *cr);
+    void draw_confirm_sell(cairo_t *cr, Dialog &d);
+    void draw_talk(cairo_t *cr, Dialog &d);
+    void draw_audience(cairo_t *cr, Dialog &d);
+    void draw_databank(cairo_t *cr, Dialog &d);
+    void draw_custom_world(cairo_t *cr, Dialog &d);
+    void draw_nuke(cairo_t *cr, Dialog &d);
+    void open_talks();                       // one dialog for each audience waiting
+    void answer_talk(bool accept);
+    void audience(int civ, civ::Proposal p);
+    void open_databank(int topic, const std::string &select = std::string());
 
     struct MenuItem {
         std::string label;

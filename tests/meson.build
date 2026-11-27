@@ -6,3 +6,9 @@ foreach t : ['calendar', 'terrain_yields', 'tech_prereqs', 'units_table', 'comba
              'railroads', 'no_pollution', 'no_recycling', 'specialists', 'corruption', 'research_cost', 'barbarians', 'space_race', 'pad_nav']
   test(t, rules_tests, args: [t], timeout: 120)
 endforeach
+m4_tests = executable('m4_tests', files('m4_tests.cpp'), dependencies: civcore_dep)
+foreach t : ['empire_size', 'celebration', 'democracy_collapse', 'anarchy_length', 'buy_cost', 'sell', 'barracks',
+             'capture', 'nuke', 'trireme', 'air_targets', 'orders', 'disasters',
+             'treaties', 'senate', 'tribute', 'talks', 'ai_peace', 'civil_war', 'tribes', 'worlds', 'databank', 'musketeers']
+  test(t, m4_tests, args: [t], timeout: 120, suite: 'm4')
+endforeach

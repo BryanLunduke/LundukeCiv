@@ -205,7 +205,7 @@ static void test_units_table()
     const Row rows[] = {
         {UnitType::Settlers, 0, 1, 1, 40},   {UnitType::Militia, 1, 1, 1, 10},    {UnitType::Phalanx, 1, 2, 1, 20},
         {UnitType::Legion, 3, 1, 1, 20},     {UnitType::Chariot, 4, 1, 2, 40},    {UnitType::Cavalry, 2, 1, 2, 20},
-        {UnitType::Knights, 4, 2, 2, 40},    {UnitType::Catapult, 6, 1, 1, 40},   {UnitType::Musketeers, 2, 3, 1, 30},
+        {UnitType::Knights, 4, 2, 2, 40},    {UnitType::Catapult, 6, 1, 1, 40},   {UnitType::Musketeers, 3, 3, 1, 30},
         {UnitType::Riflemen, 3, 5, 1, 30},   {UnitType::Cannon, 8, 1, 1, 40},     {UnitType::Artillery, 12, 2, 2, 60},
         {UnitType::Armor, 10, 5, 3, 80},     {UnitType::MechInf, 6, 6, 3, 50},    {UnitType::Diplomat, 0, 0, 2, 30},
         {UnitType::Caravan, 0, 1, 1, 50},    {UnitType::Trireme, 1, 0, 3, 40},    {UnitType::Sail, 1, 1, 3, 40},
@@ -827,7 +827,7 @@ static void test_no_pollution()
         CHECK(std::strcmp(building_info(b).name, "Recycling Center") != 0);
     }
     const std::string text = save_game(g);
-    CHECK(text.rfind("LUNDUKECIV 4\n", 0) == 0);
+    CHECK(text.rfind("LUNDUKECIV 5\n", 0) == 0);
     CHECK(text.find("climate|") == std::string::npos);
 
     // A version 2 save: City Walls, Factory, Mass Transit, Mfg. Plant,
@@ -839,7 +839,7 @@ static void test_no_pollution()
     CHECK(v.found_city(vs, "Oldtown"));
     const int cleaner = place(v, 0, UnitType::Settlers, 31, 31);
     std::string old = save_game(v);
-    old.replace(0, std::strlen("LUNDUKECIV 4"), "LUNDUKECIV 2");
+    old.replace(0, std::strlen("LUNDUKECIV 5"), "LUNDUKECIV 2");
     {
         // City line: field 9 build_unit, 10 build, 11 buildings.
         const size_t at = old.find("city|");
@@ -918,7 +918,7 @@ static void test_no_recycling()
     v.civs[0].techs.fill(false);
     v.civs[1].techs.fill(false);
     std::string old = save_game(v);
-    old.replace(0, std::strlen("LUNDUKECIV 4"), "LUNDUKECIV 3");
+    old.replace(0, std::strlen("LUNDUKECIV 5"), "LUNDUKECIV 3");
     for (int civ = 0; civ < 2; ++civ) {
         size_t at = 0;
         for (int k = 0; k <= civ; ++k) at = old.find("civ|", at + (k ? 1 : 0));
@@ -957,7 +957,7 @@ static void test_no_recycling()
     CHECK(w.civs[1].research == Advance::Robotics);
     // Saved again it is a version 4 save that loads the same.
     const std::string again = save_game(w);
-    CHECK(again.rfind("LUNDUKECIV 4\n", 0) == 0);
+    CHECK(again.rfind("LUNDUKECIV 5\n", 0) == 0);
     Game x;
     CHECK(load_game(again, x));
     CHECK(save_game(x) == again);
@@ -1438,6 +1438,7 @@ static void test_space_race()
     l.declare_war(1, 0);
     const int raider = place(l, 1, UnitType::Armor, 11, 10);
     CHECK(cap != nullptr);
+    cap->size = std::max(cap->size, 3);   // a size-1 city would be razed on capture
     l.move(raider, -1, 0);
     CHECK(l.city_at(10, 10) && l.city_at(10, 10)->owner == 1);
     CHECK_EQ(l.civs[0].arrival_turn, -1);

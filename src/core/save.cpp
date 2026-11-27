@@ -16,7 +16,8 @@ namespace civ {
 
 namespace {
 
-constexpr const char *kMagic = "LUNDUKECIV 4";      // written
+constexpr const char *kMagic = "LUNDUKECIV 5";      // written
+constexpr const char *kMagic4 = "LUNDUKECIV 4";     // still read: before diplomacy talks and tribes
 constexpr const char *kMagic3 = "LUNDUKECIV 3";     // still read: before Recycling was dropped
 constexpr const char *kMagic2 = "LUNDUKECIV 2";     // still read: milestone 2 saves
 constexpr const char *kMagic1 = "LUNDUKECIV 1";     // still read: milestone 1 saves
@@ -94,6 +95,20 @@ std::vector<std::string> split(const std::string &line)
     return out;
 }
 
+template <size_t N> std::string csv(const std::array<int, N> &a)
+{
+    std::string s;
+    for (size_t i = 0; i < N; ++i) s += (i ? "," : "") + std::to_string(a[i]);
+    return s;
+}
+
+template <size_t N> void read_csv(const std::string &s, std::array<int, N> &a)
+{
+    std::istringstream in(s);
+    std::string v;
+    for (size_t i = 0; i < N && std::getline(in, v, ','); ++i) a[i] = std::atoi(v.c_str());
+}
+
 long long num(const std::vector<std::string> &f, size_t i)
 {
     return i < f.size() ? std::strtoll(f[i].c_str(), nullptr, 10) : 0;
@@ -134,6 +149,12 @@ std::string save_game(const Game &g)
           << static_cast<int>(c.contact) << "|" << static_cast<int>(c.embassy) << "|" << (c.barbarian ? 1 : 0) << "|" << c.structurals << "|"
           << c.components << "|" << c.modules << "|" << c.launch_turn << "|" << c.arrival_turn << "\n";
     }
+    // Version 5: treaties, grudges and tribes, one line per civ by index.
+    for (size_t i = 0; i < g.civs.size(); ++i) {
+        const Civ &c = g.civs[i];
+        o << "civ5|" << i << "|" << c.tribe << "|" << static_cast<int>(c.ceasefire) << "|" << static_cast<int>(c.peace) << "|"
+          << static_cast<int>(c.vendetta) << "|" << csv(c.ceasefire_end) << "|" << csv(c.last_talk) << "\n";
+    }
     for (const City &c : g.cities) {
         std::string worked;
         for (const auto &w : c.worked) worked += std::to_string(w.first) + "," + std::to_string(w.second) + ";";
@@ -142,7 +163,9 @@ std::string save_game(const Game &g)
           << c.entertainers << "|" << c.manual << "|" << c.founded << "|" << c.bought << "|" << worked << "|";
         for (size_t r = 0; r < c.routes.size(); ++r) o << (r ? "," : "") << c.routes[r];
         o << "|" << static_cast<int>(c.stolen) << "|" << c.taxmen << "|" << c.scientists << "\n";
+        o << "cityx|" << c.id << "|" << (c.celebrating ? 1 : 0) << "|" << c.disorder_turns << "|" << (c.sold ? 1 : 0) << "\n";
     }
+    o << "civil|" << g.civil_wars << "\n";
     for (const Unit &u : g.units) {
         o << "unit|" << u.id << "|" << static_cast<int>(u.type) << "|" << u.owner << "|" << u.x << "|" << u.y << "|"
           << u.moves << "|" << u.veteran << "|" << static_cast<int>(u.order) << "|" << u.work << "|" << u.home << "|"
@@ -167,8 +190,8 @@ bool load_game(const std::string &text, Game &out, std::string *error)
     };
     std::istringstream in(text);
     std::string line;
-    if (!std::getline(in, line) || (line != kMagic && line != kMagic3 && line != kMagic2 && line != kMagic1)) return fail("Not a Lunduke Civ saved game.");
-    const int version = line == kMagic ? 4 : line == kMagic3 ? 3 : (line == kMagic2 ? 2 : 1);
+    if (!std::getline(in, line) || (line != kMagic && line != kMagic4 && line != kMagic3 && line != kMagic2 && line != kMagic1)) return fail("Not a Lunduke Civ saved game.");
+    const int version = line == kMagic ? 5 : line == kMagic4 ? 4 : line == kMagic3 ? 3 : (line == kMagic2 ? 2 : 1);
     Game g;
     bool ended = false;
     while (std::getline(in, line)) {
@@ -247,6 +270,12 @@ bool load_game(const std::string &text, Game &out, std::string *error)
                 c.launch_turn = static_cast<int>(num(f, 25));
                 c.arrival_turn = static_cast<int>(num(f, 26));
             }
+            if (version < 5 && c.name_next >= 100) {
+                // A computer people from before the fourteen tribes: their
+                // old city list is gone, so name new cities from a tribe's.
+                c.tribe = (c.name_next / 100 - 1) % kTribeCount;
+                c.name_next %= 100;
+            }
             g.civs.push_back(c);
         } else if (k == "city") {
             City c;
@@ -317,6 +346,26 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             u.done = num(f, 15) != 0;
             u.hp = f.size() > 16 ? std::clamp(static_cast<int>(num(f, 16)), 1, kUnitHp) : kUnitHp;
             g.units.push_back(u);
+        } else if (k == "civ5") {
+            const int i = static_cast<int>(num(f, 1));
+            if (i < 0 || i >= static_cast<int>(g.civs.size())) return fail("Bad civ index.");
+            Civ &c = g.civs[static_cast<size_t>(i)];
+            c.tribe = std::clamp(static_cast<int>(num(f, 2)), -1, kTribeCount - 1);
+            c.ceasefire = static_cast<std::uint8_t>(num(f, 3));
+            c.peace = static_cast<std::uint8_t>(num(f, 4));
+            c.vendetta = static_cast<std::uint8_t>(num(f, 5));
+            read_csv(f.size() > 6 ? f[6] : "", c.ceasefire_end);
+            read_csv(f.size() > 7 ? f[7] : "", c.last_talk);
+        } else if (k == "cityx") {
+            const int id = static_cast<int>(num(f, 1));
+            for (City &c : g.cities) {
+                if (c.id != id) continue;
+                c.celebrating = num(f, 2) != 0;
+                c.disorder_turns = std::max(0, static_cast<int>(num(f, 3)));
+                c.sold = num(f, 4) != 0;
+            }
+        } else if (k == "civil") {
+            g.civil_wars = static_cast<int>(num(f, 1));
         } else if (k == "wonders") {
             for (int w = 0; w < kWonderCount && w + 1 < static_cast<int>(f.size()); ++w) g.wonder_city[w] = static_cast<int>(num(f, w + 1));
         } else if (k == "space") {

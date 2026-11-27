@@ -73,7 +73,7 @@ enum UnitFlag : unsigned {
     kIgnoreZoc = 1u << 1,
     kIgnoreWalls = 1u << 2,
     kSight2 = 1u << 3,
-    kCoastal = 1u << 4,   // trireme: stays next to land
+    kCoastal = 1u << 4,   // trireme: may be lost at sea away from land
     kNoLandAttack = 1u << 5,
     kCarriesAir = 1u << 6,
     kNonMilitary = 1u << 7,
