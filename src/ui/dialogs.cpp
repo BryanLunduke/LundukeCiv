@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 
 namespace ui {
 
@@ -106,6 +107,12 @@ void App::draw_dialog(cairo_t *cr, Dialog &d)
     case DialogKind::Databank: draw_databank(cr, d); break;
     case DialogKind::CustomWorld: draw_custom_world(cr, d); break;
     case DialogKind::Nuke: draw_nuke(cr, d); break;
+    case DialogKind::Retire: draw_retire(cr, d); break;
+    case DialogKind::Score: draw_score(cr, d); break;
+    case DialogKind::HallOfFame: draw_hall_of_fame(cr, d); break;
+    case DialogKind::FindCity: draw_find_city(cr, d); break;
+    case DialogKind::Options: draw_options(cr, d); break;
+    case DialogKind::Event: draw_event(cr, d); break;
     default: break;
     }
 }
@@ -913,8 +920,10 @@ void App::draw_science(cairo_t *cr, Dialog &d)
         text(cr, kUiFont, f, L, cy, kSlateDim);
         cy += 24;
     }
+    const bool locked = !g().can_change_research(me);
     if (c.research != Advance::None) {
         text(cr, kBoldFont, std::string("Researching ") + advance_info(c.research).name, L, cy, kSlateGold);
+        if (locked) text_right(cr, kTagFont, "STUDY UNDER WAY · NO CHANGE UNTIL IT IS FOUND", R, cy - 18, kSlateGoldDim);
         const int t = research_turns(me);
         text_right(cr, kUiFont, std::to_string(c.bulbs) + " / " + std::to_string(g().research_cost(me)) + " \u00b7 " + turns_text(t), R, cy,
                    kSlateDim);
@@ -935,24 +944,26 @@ void App::draw_science(cairo_t *cr, Dialog &d)
         const double ay = cy + (two ? static_cast<double>(i / 2) : static_cast<double>(i)) * 50;
         if (ay + 46 > y + h - 70) break;
         const bool cur = c.research == a;
-        const bool hv = hover(ax, ay, colw, 44);
+        const bool hv = !locked && hover(ax, ay, colw, 44);
         round_rect(cr, ax, ay, colw, 44, 6);
         set(cr, cur ? hex(0x3E4A5E) : (hv ? hex(0x354154) : hex(0x29323F)));
         cairo_fill_preserve(cr);
         set(cr, cur ? kSlateGold : hex(0x3C4859));
         cairo_set_line_width(cr, cur ? 2 : 1);
         cairo_stroke(cr);
-        text(cr, kBoldFont, advance_info(a).name, ax + 12, ay + 4, cur ? kSlateGold : kSlateInk);
+        text(cr, kBoldFont, advance_info(a).name, ax + 12, ay + 4, cur ? kSlateGold : (locked ? kSlateDim : kSlateInk));
         const std::string en = enables_text(a);
         cairo_save(cr);
         cairo_rectangle(cr, ax, ay, colw - 6, 44);
         cairo_clip(cr);
         text(cr, kTagFont, en.empty() ? "Leads to further advances" : "Allows: " + en, ax + 12, ay + 25, kSlateDim);
         cairo_restore(cr);
-        hot(ax, ay, colw, 44, [this, me, a] {
-            g().civs[me].research = a;
-            close_top();
-        });
+        if (!locked) {
+            hot(ax, ay, colw, 44, [this, me, a] {
+                // As in DOS, the choice stands until the advance is found.
+                if (g().set_research(me, a)) close_top();
+            });
+        }
     }
     const double bx = R - 140, by = y + h - 54;
     wide_button(cr, bx, by, 140, 38, "Close", "Esc", true, hover(bx, by, 140, 38));
@@ -1064,7 +1075,7 @@ void App::draw_revolution(cairo_t *cr, Dialog &d)
 
 void App::draw_saveload(cairo_t *cr, Dialog &d)
 {
-    const double w = 620, h = 480, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    const double w = 620, h = d.saving ? 480 : 540, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
     double cy = dialog_frame(cr, x, y, w, h, d.title);
     const double L = x + 24, R = x + w - 24;
     text(cr, kUiFont, d.saving ? "Choose a slot to save into." : "Choose a saved game to load.", L, cy, kSlateDim);
@@ -1091,6 +1102,24 @@ void App::draw_saveload(cairo_t *cr, Dialog &d)
             });
         }
         cy += 52;
+    }
+    if (!d.saving) {
+        // The autosave (Game Options), when there is one.
+        std::ifstream probe(autosave_path());
+        const bool have = static_cast<bool>(probe);
+        const bool hv = have && hover(L, cy, R - L, 46);
+        round_rect(cr, L, cy, R - L, 46, 6);
+        set(cr, hv ? hex(0x354154) : hex(0x29323F));
+        cairo_fill(cr);
+        text(cr, kBoldFont, "Autosave", L + 12, cy + 12, have ? kSlateGold : kSlateEdge);
+        text(cr, kUiFont, have ? "Saved every " + std::to_string(kAutosaveTurns) + " turns" : "None yet", L + 110, cy + 12, have ? kSlateInk : kSlateDim);
+        if (have) {
+            hot(L, cy, R - L, 46, [this] {
+                close_top();
+                std::string err;
+                if (!load_file(autosave_path(), &err)) message("Load Failed", {err});
+            });
+        }
     }
     std::string shown = save_dir_;
     if (shown.size() > 52) {
@@ -1291,10 +1320,29 @@ void App::draw_game_over(cairo_t *cr, Dialog &d)
         msg = "The " + g().civs[human()].name + " have been destroyed. History will forget them.";
     } else if (g().winner >= 0) {
         msg = "The " + g().civs[g().winner].name + " have conquered the world.";
+    } else if (g().retired) {
+        msg = g().civs[human()].leader + " of the " + g().civs[human()].name + " has stepped down. The chroniclers close their books.";
     }
     text(cr, kUiFont, msg, x + 24, cy, kSlateInk, 1.0, static_cast<int>(w - 48));
-    const double fy = cy + measure(cr, kUiFont, msg, static_cast<int>(w - 48)).h + 14;
-    text(cr, kUiFont, "Final year: " + year_text(year_for_turn(g().turn)), x + 24, std::max(cy + 70, fy), kSlateDim);
+    double fy = std::max(cy + 70, cy + measure(cr, kUiFont, msg, static_cast<int>(w - 48)).h + 14);
+    text(cr, kUiFont, "Final year: " + year_text(year_for_turn(g().end_turn_number > 0 ? g().end_turn_number : g().turn)), x + 24, fy, kSlateDim);
+    if (!g().human_dead) {
+        const FameEntry fe = fame_entry(g());
+        text(cr, kUiFont,
+             "Civilization Score " + with_commas(fe.score) + " · Rating " + std::to_string(fe.rating()) + "% · " +
+                 famous_ruler(famous_rank(fe.rating())),
+             x + 24, fy + 24, kSlateGold);
+        const double hx = x + 24, hy = y + h - 54;
+        wide_button(cr, hx, hy, 150, 38, "Hall of Fame", "", false, hover(hx, hy, 150, 38));
+        const int place = d.scroll;
+        hot(hx, hy, 150, 38, [this, place] {
+            Dialog f;
+            f.kind = DialogKind::HallOfFame;
+            f.title = "Hall of Fame";
+            f.scroll = place;
+            open(f);
+        });
+    }
     const double bx = x + w - 24 - 160, by = y + h - 54;
     wide_button(cr, bx, by, 160, 38, "New Game", "", true, hover(bx, by, 160, 38));
     hot(bx, by, 160, 38, [this] { open_new_game_dialog(); });
@@ -1323,8 +1371,8 @@ void App::draw_help(cairo_t *cr, Dialog &d)
         {"C  H", "Center on the unit, on the capital"},
         {"+  -  wheel", "Zoom"},
         {"T  A  V", "Tax rates, science, cities"},
-        {"O  Y  E", "Wonders, spaceship, Databank"},
-        {"Ctrl+S  Ctrl+L", "Save, load"},
+        {"O  Y  E  F9", "Wonders, spaceship, Databank, score"},
+        {"Ctrl+S  L  F", "Save, load, find a city"},
         {"Click", "Select a unit, open a city, move next door"},
         {"Right click", "Center the map there"},
     };
@@ -1476,7 +1524,7 @@ void App::draw_diplomat_menu(cairo_t *cr, Dialog &d)
     const int me = human();
     const City *c = g().city_at(d.tx, d.ty);
     const int them = c ? c->owner : g().owner_at(d.tx, d.ty);
-    const double w = 700, h = 520, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    const double w = 720, h = std::min(geo_.win_h - 16, 590), x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
     std::string where;
     if (c) where = c->name + " \u00b7 the " + g().civs[them].name;
     else if (them >= 0) where = "a unit of the " + g().civs[them].name;
@@ -1484,11 +1532,10 @@ void App::draw_diplomat_menu(cairo_t *cr, Dialog &d)
     const double L = x + 24, R = x + w - 24;
     paint_pixmap(cr, art::unit_card(UnitType::Diplomat, civ_colors(g().civs[me].color)), L, cy, 2);
     const bool war = them >= 0 && g().at_war(me, them);
-    text(cr, kUiFont,
-         std::string(war ? "We are at war with them." : "We are at peace with them: hostile acts (marked) mean war.") +
-             " The Diplomat is spent on any action. Treasury: " + with_commas(g().civs[me].gold) + " gold.",
-         L + 76, cy + 4, kSlateDim, 1.0, static_cast<int>(R - L - 76));
-    cy += 72;
+    const std::string intro = std::string(war ? "We are at war with them." : "At peace: the marked acts mean war.") +
+                              " All but Meet with King and Bribe Unit spend the Diplomat. Treasury: " + with_commas(g().civs[me].gold) + " gold.";
+    text(cr, kUiFont, intro, L + 76, cy + 4, kSlateDim, 1.0, static_cast<int>(R - L - 76));
+    cy += std::max(72.0, measure(cr, kUiFont, intro, static_cast<int>(R - L - 76)).h + 16.0);
     for (int a = 0; a < static_cast<int>(DiploAction::Count); ++a) {
         const DiploAction act = static_cast<DiploAction>(a);
         const bool ok = g().diplomat_can(d.unit_id, d.tx, d.ty, act);
@@ -1498,6 +1545,7 @@ void App::draw_diplomat_menu(cairo_t *cr, Dialog &d)
             note = c && ((g().civs[me].embassy >> them) & 1u) ? "We already have an embassy." : "See their treasury, advances and plans.";
             break;
         case DiploAction::Investigate: note = "A look inside the city."; break;
+        case DiploAction::MeetKing: note = c ? "An audience with their ruler; the Diplomat stays." : "Only at a city."; break;
         case DiploAction::StealTech: note = c && ((c->stolen >> me) & 1u) ? "Already robbed by our agents." : "Take one advance they know and we don't."; break;
         case DiploAction::Sabotage: note = "Destroy production or a building."; break;
         case DiploAction::Incite: {
@@ -1538,8 +1586,21 @@ void App::diplomat_choose(int unit_id, int tx, int ty, DiploAction a)
     close_top();
     const City *c = g().city_at(tx, ty);
     const int cid = c ? c->id : -1;
+    const int owner = c ? c->owner : -1;
     g().diplomat_act(unit_id, tx, ty, a);
     refresh_terrain();
+    if (a == DiploAction::MeetKing && owner >= 0) {
+        // The m4 audience, opened by our envoy at their court.
+        collect_news(false);
+        Dialog au;
+        au.kind = DialogKind::Audience;
+        au.title = "Audience";
+        au.other = owner;
+        au.lines = {g().leader_greeting(owner) + " receives our Diplomat at court."};
+        open(au);
+        select_next(true);
+        return;
+    }
     if (a == DiploAction::Investigate && cid >= 0) {
         collect_news(false);
         dialogs_.clear();
@@ -2037,6 +2098,348 @@ void App::draw_nuke(cairo_t *cr, Dialog &d)
         ty += measure(cr, kUiFont, l, static_cast<int>(w - 264)).h + 8;
     }
     const double bx = x + w - 24 - 140, by = y + h - 56;
+    wide_button(cr, bx, by, 140, 38, "OK", "Enter", true, hover(bx, by, 140, 38));
+    hot(bx, by, 140, 38, [this] { close_top(); });
+}
+
+// ---------------------------------------------------------------- the end of the game
+
+void App::draw_retire(cairo_t *cr, Dialog &d)
+{
+    const double w = 560, h = 250, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, d.title);
+    const FameEntry fe = fame_entry(g());
+    text(cr, kUiFont,
+         "Step down now, in " + year_text(year_for_turn(g().turn)) + "? The game ends and the " + g().civs[human()].name +
+             " are scored as they stand: " + with_commas(fe.score) + " points, a rating of " + std::to_string(fe.rating()) + "%.",
+         x + 24, cy, kSlateInk, 1.0, static_cast<int>(w - 48));
+    const double bx = x + w - 24 - 160, by = y + h - 54;
+    wide_button(cr, bx, by, 160, 38, "Retire", "Enter", true, hover(bx, by, 160, 38));
+    hot(bx, by, 160, 38, [this] {
+        KeyEvent k;
+        k.key = Key::Enter;
+        key(k);
+    });
+    wide_button(cr, bx - 170, by, 160, 38, "Rule On", "Esc", false, hover(bx - 170, by, 160, 38));
+    hot(bx - 170, by, 160, 38, [this] { close_top(); });
+}
+
+void App::draw_score(cairo_t *cr, Dialog &d)
+{
+    const int me = human();
+    const ScoreBreakdown sb = g().score(me);
+    const double w = std::min(780, geo_.win_w - 20), h = std::min(geo_.win_h - 16, 560), x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, d.title);
+    const double L = x + 24, R = x + w - 24;
+    const Civ &c = g().civs[me];
+    std::string head = "The " + c.name + " under " + c.leader + ", " + year_text(year_for_turn(g().turn)) + ".";
+    if (d.saving && g().retired) head = c.leader + " retires in " + year_text(year_for_turn(g().end_turn_number)) + ". The " + c.name + " are scored as they stand.";
+    else if (d.saving) head = "The year " + year_text(Game::kEndYear) + " has come and " + c.leader + "'s reign is over. The " + c.name + " are scored as they stand.";
+    text(cr, kUiFont, head, L, cy, kSlateDim, 1.0, static_cast<int>(R - L));
+    cy += measure(cr, kUiFont, head, static_cast<int>(R - L)).h + 12;
+    section(cr, "CIVILIZATION SCORE", L, cy, R);
+    cy += 22;
+    struct Row {
+        std::string label, detail;
+        int points;
+        bool show;
+    };
+    const int future_n = sb.future / Game::kFuturePoints;
+    std::string ship = sb.spaceship > 0 ? "Colonists landed on Alpha Centauri" : "None landed";
+    if (sb.spaceship == 0 && sb.spaceship_possible > 0) ship = "In flight: " + with_commas(sb.spaceship_possible) + " points if it lands";
+    const Row rows[] = {
+        {"Citizens", std::to_string(sb.happy) + " happy (2 each), " + std::to_string(sb.content) + " content and " + std::to_string(sb.specialists) +
+                         (sb.specialists == 1 ? " specialist (1), " : " specialists (1), ") + std::to_string(sb.unhappy) + " unhappy (none) \u00b7 at 40% luxuries",
+         sb.citizens, true},
+        {"Wonders of the World", std::to_string(sb.wonders) + " \u00d7 " + std::to_string(Game::kWonderPoints), sb.wonder_points, true},
+        {"World peace", std::to_string(g().peace_turns) + " turns in AD without war \u00d7 " + std::to_string(Game::kPeacePerTurn) + ", at most " +
+                            std::to_string(Game::kPeaceMax),
+         sb.peace, true},
+        {"Future Technology", std::to_string(future_n) + " \u00d7 " + std::to_string(Game::kFuturePoints), sb.future, true},
+        {"Spaceship", ship, sb.spaceship, true},
+        {"Conquest", "The whole world united: (550 \u2212 turns) \u00d7 2 + 100 a rival + 400", sb.bonus, sb.bonus >= 0},
+    };
+    for (const Row &r : rows) {
+        if (!r.show) continue;
+        text(cr, kBoldFont, r.label, L, cy, kSlateInk);
+        text_right(cr, kBoldFont, with_commas(r.points), R, cy, kSlateGold);
+        cairo_save(cr);
+        cairo_rectangle(cr, L, cy, R - L - 70, 50);
+        cairo_clip(cr);
+        text(cr, kTagFont, r.detail, L, cy + 22, kSlateDim);
+        cairo_restore(cr);
+        cy += 46;
+    }
+    fill(cr, L, cy, R - L, 1, kSlateEdge);
+    cy += 10;
+    text(cr, kBoldFont, "Total", L, cy, kSlateInk);
+    text_right(cr, kBoldFont, with_commas(sb.total), R, cy, kSlateGold);
+    cy += 34;
+    const int rating = sb.total * (static_cast<int>(g().difficulty) + 1) / 50;
+    round_rect(cr, L, cy, R - L, 64, 8);
+    set(cr, kSlateDeep);
+    cairo_fill(cr);
+    text(cr, kBoldFont, "Civilization Rating " + std::to_string(rating) + "%", L + 16, cy + 10, kSlateGold);
+    text(cr, kTagFont,
+         std::string("Score \u00d7 ") + std::to_string(static_cast<int>(g().difficulty) + 1) + " (" + difficulty_name(g().difficulty) +
+             ") \u00f7 50 \u00b7 history compares you to " + famous_ruler(famous_rank(rating)) + ".",
+         L + 16, cy + 38, kSlateDim);
+    if (!g().game_ended) {
+        const int left = Game::kEndYear - year_for_turn(g().turn);
+        text_right(cr, kTagFont, "THE REIGN ENDS IN " + year_text(Game::kEndYear) + (left > 0 ? "" : " \u00b7 NOW"), R - 16, cy + 12, kSlateDim);
+    }
+    const double bx = R - 170, by = y + h - 54;
+    if (d.saving) {
+        wide_button(cr, bx, by, 170, 38, "Hall of Fame", "Enter", true, hover(bx, by, 170, 38));
+    } else {
+        wide_button(cr, bx, by, 170, 38, "Close", "Esc", true, hover(bx, by, 170, 38));
+    }
+    hot(bx, by, 170, 38, [this] { close_top(); });
+}
+
+void App::draw_hall_of_fame(cairo_t *cr, Dialog &d)
+{
+    const double w = std::min(900, geo_.win_w - 20), h = std::min(geo_.win_h - 16, 540), x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, d.title);
+    const double L = x + 24, R = x + w - 24;
+    text(cr, kUiFont, "The six greatest reigns, by Civilization Rating: the score, times the level plus one, over fifty.", L, cy, kSlateDim, 1.0,
+         static_cast<int>(R - L));
+    cy += 30;
+    if (fame_.empty()) {
+        text(cr, kBoldFont, "No reign has ended yet. Rule until 2100 AD, retire, or win, to be remembered here.", L, cy + 20, kSlateInk, 1.0,
+             static_cast<int>(R - L));
+    }
+    const double cols[] = {L + 12, L + 52, L + (R - L) * 0.47, L + (R - L) * 0.62, L + (R - L) * 0.77};
+    if (!fame_.empty()) {
+        text(cr, kTagFont, "#", cols[0], cy, kSlateDim);
+        text(cr, kTagFont, "RULER", cols[1], cy, kSlateDim);
+        text(cr, kTagFont, "LEVEL", cols[2], cy, kSlateDim);
+        text(cr, kTagFont, "YEAR", cols[3], cy, kSlateDim);
+        text(cr, kTagFont, "SCORE", cols[4], cy, kSlateDim);
+        text_right(cr, kTagFont, "RATING", R - 12, cy, kSlateDim);
+        cy += 20;
+    }
+    for (size_t i = 0; i < fame_.size(); ++i) {
+        const FameEntry &e = fame_[i];
+        const bool mine = static_cast<int>(i) == d.scroll;
+        round_rect(cr, L, cy, R - L, 50, 6);
+        set(cr, mine ? hex(0x3E4A5E) : hex(0x29323F));
+        cairo_fill_preserve(cr);
+        set(cr, mine ? kSlateGold : hex(0x3C4859));
+        cairo_set_line_width(cr, mine ? 2 : 1);
+        cairo_stroke(cr);
+        text(cr, kBoldFont, std::to_string(i + 1), cols[0], cy + 6, mine ? kSlateGold : kSlateDim);
+        text(cr, kBoldFont, e.leader + " of the " + e.people, cols[1], cy + 4, mine ? kSlateGold : kSlateInk);
+        text(cr, kTagFont, std::string("\u201c") + famous_ruler(famous_rank(e.rating())) + "\u201d \u00b7 " + with_commas(e.population) + " people",
+             cols[1], cy + 28, kSlateDim);
+        text(cr, kUiFont, difficulty_name(static_cast<Difficulty>(std::clamp(e.difficulty, 0, 4))), cols[2], cy + 14, kSlateInk);
+        text(cr, kUiFont, year_text(e.year), cols[3], cy + 14, kSlateInk);
+        text(cr, kUiFont, with_commas(e.score), cols[4], cy + 14, kSlateInk);
+        text_right(cr, kBoldFont, std::to_string(e.rating()) + "%", R - 12, cy + 13, kSlateGold);
+        cy += 56;
+    }
+    if (d.saving && d.scroll < 0 && !fame_.empty())
+        text(cr, kUiFont, "This reign did not rate among the six greatest.", L, y + h - 92, kSlateDim);
+    const double bx = R - 170, by = y + h - 54;
+    if (d.saving && !g().over()) {
+        // 2100 AD: the ruler may play on; the Hall of Fame keeps this score.
+        wide_button(cr, bx - 20, by, 190, 38, "Keep Playing", "Enter", true, hover(bx - 20, by, 190, 38));
+        hot(bx - 20, by, 190, 38, [this] {
+            close_top();
+            news_ = "The reign is over, but the " + g().civs[human()].name + " play on. The Hall of Fame keeps the score of " +
+                    year_text(Game::kEndYear) + ".";
+        });
+        wide_button(cr, bx - 200, by, 170, 38, "New Game", "", false, hover(bx - 200, by, 170, 38));
+        hot(bx - 200, by, 170, 38, [this] { open_new_game_dialog(); });
+    } else {
+        wide_button(cr, bx, by, 170, 38, "Close", "Esc", true, hover(bx, by, 170, 38));
+        hot(bx, by, 170, 38, [this] { close_top(); });
+    }
+}
+
+// ---------------------------------------------------------------- the Game menu
+
+void App::find_city_go(int city_id)
+{
+    while (!dialogs_.empty() && dialogs_.back().kind == DialogKind::FindCity) dialogs_.pop_back();
+    const City *c = g().city(city_id);
+    if (!c) return;
+    center_on(c->x, c->y);
+    news_ = c->name + (c->owner == human() ? std::string(", one of our cities.") : " of the " + g().civs[c->owner].name + ".");
+}
+
+void App::draw_find_city(cairo_t *cr, Dialog &d)
+{
+    const double w = 620, h = std::min(geo_.win_h - 16, 560), x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, d.title);
+    const double L = x + 24, R = x + w - 24;
+    text(cr, kUiFont, "Type the first letters of a city's name; Enter goes to the one marked.", L, cy, kSlateDim);
+    cy += 26;
+    field(cr, L, cy, R - L, d.field, true, blink_);
+    cy += 52;
+    const std::vector<int> found = find_cities(g(), human(), d.field);
+    if (found.empty()) text(cr, kUiFont, "No city we know of by that name.", L, cy, kSlateDim);
+    const int per_page = std::max(1, static_cast<int>((y + h - 70 - cy) / 44));
+    const int pick = std::clamp(d.scroll, 0, std::max(0, static_cast<int>(found.size()) - 1));
+    const int first = std::max(0, pick - per_page + 1);
+    for (int i = first; i < static_cast<int>(found.size()) && i < first + per_page; ++i) {
+        const City *c = g().city(found[static_cast<size_t>(i)]);
+        if (!c) continue;
+        const bool cur = i == pick;
+        const bool hv = hover(L, cy, R - L, 40);
+        round_rect(cr, L, cy, R - L, 40, 6);
+        set(cr, cur ? hex(0x3E4A5E) : (hv ? hex(0x354154) : hex(0x29323F)));
+        cairo_fill_preserve(cr);
+        set(cr, cur ? kSlateGold : hex(0x3C4859));
+        cairo_set_line_width(cr, cur ? 2 : 1);
+        cairo_stroke(cr);
+        set_argb(cr, civ_colors(g().civs[c->owner].color).main);
+        cairo_rectangle(cr, L + 12, cy + 15, 10, 10);
+        cairo_fill(cr);
+        text(cr, kBoldFont, c->name, L + 32, cy + 9, cur ? kSlateGold : kSlateInk);
+        const std::string who = c->owner == human() ? "ours \u00b7 size " + std::to_string(c->size) : "the " + g().civs[c->owner].name;
+        text_right(cr, kUiFont, who, R - 12, cy + 10, kSlateDim);
+        const int id = c->id;
+        hot(L, cy, R - L, 40, [this, id] { find_city_go(id); });
+        cy += 44;
+    }
+    const double bx = R - 140, by = y + h - 54;
+    wide_button(cr, bx, by, 140, 38, "Cancel", "Esc", false, hover(bx, by, 140, 38));
+    hot(bx, by, 140, 38, [this] { close_top(); });
+}
+
+void App::draw_options(cairo_t *cr, Dialog &d)
+{
+    const double w = 640, h = std::min(geo_.win_h - 16, 520), x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, d.title);
+    const double L = x + 24, R = x + w - 24;
+    struct Opt {
+        const char *name;
+        std::string note;
+        bool on;
+    };
+    const Opt opts[] = {
+        {"Instant Advice", "Advisers speak up at the start of a turn: disorder, an empty treasury.", options_.instant_advice},
+        {"AutoSave", "Save to the autosave slot every " + std::to_string(kAutosaveTurns) + " turns.", options_.autosave},
+        {"End of Turn", "Wait for Enter when no unit needs orders (off: the turn ends by itself).", options_.end_of_turn},
+        {"Animations", "The unit awaiting orders blinks.", options_.animations},
+        {"Enemy Moves", "Show the trails of enemy units that moved in sight.", options_.enemy_moves},
+        {"Event Screens", "Full screens for new advances, governments and cities taken.", options_.event_screens},
+    };
+    text(cr, kUiFont, "Kept with your saves for every game.", L, cy, kSlateDim);
+    cy += 28;
+    for (int i = 0; i < 6; ++i) {
+        const Opt &o = opts[i];
+        const bool hv = hover(L, cy, R - L, 52);
+        round_rect(cr, L, cy, R - L, 52, 6);
+        set(cr, hv ? hex(0x354154) : hex(0x29323F));
+        cairo_fill(cr);
+        // The switch: a gold check in a box.
+        round_rect(cr, L + 12, cy + 14, 24, 24, 4);
+        set(cr, o.on ? kSlateGold : kSlateEdge);
+        cairo_set_line_width(cr, 2);
+        cairo_stroke(cr);
+        if (o.on) {
+            cairo_move_to(cr, L + 17, cy + 26);
+            cairo_line_to(cr, L + 22, cy + 32);
+            cairo_line_to(cr, L + 31, cy + 19);
+            cairo_set_line_width(cr, 3);
+            set(cr, kSlateGold);
+            cairo_stroke(cr);
+        }
+        text(cr, kBoldFont, o.name, L + 50, cy + 6, o.on ? kSlateInk : kSlateDim);
+        text(cr, kTagFont, o.note, L + 50, cy + 30, kSlateDim);
+        text_right(cr, kSmallBold, std::to_string(i + 1), R - 12, cy + 17, kSlateGoldDim);
+        const char ch = static_cast<char>('1' + i);
+        hot(L, cy, R - L, 52, [this, ch] {
+            KeyEvent k;
+            k.key = Key::Char;
+            k.ch = ch;
+            key(k);
+        });
+        cy += 58;
+    }
+    const double bx = R - 140, by = y + h - 54;
+    wide_button(cr, bx, by, 140, 38, "Done", "Esc", true, hover(bx, by, 140, 38));
+    hot(bx, by, 140, 38, [this] { close_top(); });
+}
+
+// ---------------------------------------------------------------- event screens
+
+void App::draw_event(cairo_t *cr, Dialog &d)
+{
+    const EventKind kind = static_cast<EventKind>(d.other);
+    const int me = human();
+    const double w = std::min(960, geo_.win_w - 20), h = 420, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    double cy = dialog_frame(cr, x, y, w, h, d.title);
+    const double L = x + 24, R = x + w - 24;
+    // The rival in the story: who lost or took the city.
+    const int rival = (kind == EventKind::CityTaken || kind == EventKind::CityLost) ? d.scroll : -1;
+    const art::CivColors &mine = civ_colors(g().civs[me].color);
+    const art::CivColors &theirs = rival >= 0 && rival < static_cast<int>(g().civs.size()) ? civ_colors(g().civs[rival].color) : mine;
+    art::EventScene scene = art::EventScene::Advance;
+    if (kind == EventKind::Government) scene = art::EventScene::Government;
+    if (kind == EventKind::CityTaken) scene = art::EventScene::CityTaken;
+    if (kind == EventKind::CityLost) scene = art::EventScene::CityLost;
+    const int scale = 5;
+    const double pw = art::event_scene_width() * scale, ph = art::event_scene_height() * scale;
+    round_rect(cr, L, cy, pw + 16, ph + 16, 8);
+    set(cr, kSlateDeep);
+    cairo_fill(cr);
+    paint_pixmap(cr, art::event_scene(scene, kind == EventKind::Government || kind == EventKind::Advance ? d.scroll : 0, mine, theirs), L + 8,
+                 cy + 8, scale);
+    const double tx = L + pw + 40, tw = R - tx;
+    std::string big, line, more, foot;
+    switch (kind) {
+    case EventKind::Advance: {
+        const Advance a = static_cast<Advance>(d.scroll);
+        big = a == Advance::FutureTech ? "Future Technology " + std::to_string(g().civs[me].future) : advance_info(a).name;
+        line = "Your wise men have mastered " + big + ".";
+        const std::string en = enables_text(a);
+        if (!en.empty()) more = "Allows: " + en + ".";
+        std::string leads;
+        for (int b = 0; b < kAdvanceCount; ++b) {
+            const AdvanceInfo &ai = advance_info(b);
+            if ((ai.req1 == a || ai.req2 == a) && !g().civs[me].techs[static_cast<size_t>(b)]) leads += (leads.empty() ? "" : ", ") + std::string(ai.name);
+        }
+        if (!leads.empty()) foot = "Leads toward " + leads + ".";
+        break;
+    }
+    case EventKind::Government: {
+        const Government gv = static_cast<Government>(d.scroll);
+        big = government_info(gv).name;
+        line = "The " + g().civs[me].name + " take up " + big + ". The people gather to hear the new order proclaimed.";
+        more = "Taxes, luxuries and science may each be set up to " + std::to_string(government_info(gv).max_rate * 10) + "%.";
+        if (g().senate(me)) foot = "A Senate now sits: it will accept every offer of peace and keep every treaty.";
+        break;
+    }
+    case EventKind::CityTaken:
+        big = d.field;
+        line = "Our armies take " + d.field + (rival >= 0 ? " from the " + g().civs[rival].name : std::string()) + "!";
+        more = "The city is ours, with what plunder its treasury held.";
+        break;
+    case EventKind::CityLost:
+        big = d.field;
+        line = d.field + " has fallen" + (rival >= 0 ? " to the " + g().civs[rival].name : std::string()) + ".";
+        more = "Its people now serve another. Take it back, or make peace.";
+        break;
+    }
+    text(cr, kTitleFont, big, tx, cy + 4, kSlateGold, 1.0, static_cast<int>(tw));
+    double ty = cy + 4 + measure(cr, kTitleFont, big, static_cast<int>(tw)).h + 12;
+    for (const std::string *s : {&line, &more, &foot}) {
+        if (s->empty()) continue;
+        text(cr, s == &line ? kUiFont : kTagFont, *s, tx, ty, s == &line ? kSlateInk : kSlateDim, 1.0, static_cast<int>(tw));
+        ty += measure(cr, s == &line ? kUiFont : kTagFont, *s, static_cast<int>(tw)).h + 12;
+    }
+    const double bx = R - 140, by = y + h - 56;
+    if ((kind == EventKind::CityTaken || kind == EventKind::CityLost) && g().city(d.city_id)) {
+        const int cid = d.city_id;
+        wide_button(cr, bx - 150, by, 140, 38, "Show Me", "", false, hover(bx - 150, by, 140, 38));
+        hot(bx - 150, by, 140, 38, [this, cid] {
+            close_top();
+            if (const City *c = g().city(cid)) center_on(c->x, c->y);
+        });
+    }
     wide_button(cr, bx, by, 140, 38, "OK", "Enter", true, hover(bx, by, 140, 38));
     hot(bx, by, 140, 38, [this] { close_top(); });
 }

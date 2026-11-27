@@ -499,6 +499,13 @@ void Game::update_tech_catchup()
 
 void Game::learn(int civ, Advance a)
 {
+    if (civ == human && !civs[civ].ai && a != Advance::None) {
+        GameEvent e;
+        e.kind = EventKind::Advance;
+        e.civ = civ;
+        e.arg = static_cast<int>(a);
+        events.push_back(e);
+    }
     if (a == Advance::FutureTech) {
         civs[civ].future++;
     } else {
@@ -2329,6 +2336,15 @@ void Game::capture_city(City &c, int new_owner)
     }
     for (int id : drop) kill_unit(id);
     say(new_owner, MsgKind::Good, "You capture " + c.name + "! Plunder: " + std::to_string(plunder) + " gold.", c.x, c.y);
+    if ((new_owner == human && !civs[new_owner].ai) || (old == human && !civs[old].ai)) {
+        GameEvent e;
+        e.kind = new_owner == human ? EventKind::CityTaken : EventKind::CityLost;
+        e.civ = human;
+        e.arg = new_owner == human ? old : new_owner;
+        e.city = c.id;
+        e.name = c.name;
+        events.push_back(e);
+    }
     say(old, MsgKind::Bad, c.name + " has fallen to the " + civs[new_owner].name + ".", c.x, c.y);
     update_city(c);
     reveal(new_owner, c.x, c.y, 2);
@@ -3133,6 +3149,13 @@ void Game::start_turn_for(int ci)
             civ.tax = std::min(10 - civ.sci, mx);
             civ.lux = 10 - civ.sci - civ.tax;
             say(ci, MsgKind::Good, std::string("The new government is ") + government_info(civ.govt).name + ".");
+            if (ci == human && !civ.ai) {
+                GameEvent e;
+                e.kind = EventKind::Government;
+                e.civ = ci;
+                e.arg = static_cast<int>(civ.govt);
+                events.push_back(e);
+            }
         }
     }
     bool learned = false;

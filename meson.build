@@ -23,6 +23,7 @@ civcore = static_library(
     'src/core/earth.cpp',
     'src/core/databank.cpp',
     'src/core/fame.cpp',
+    'src/core/options.cpp',
   ),
   include_directories: civcore_inc,
 )

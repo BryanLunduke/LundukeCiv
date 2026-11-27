@@ -69,6 +69,14 @@ int spaceship_height();
 // 32x32 icon for a spaceship part (0 structural, 1 component, 2 module).
 Pixmap space_part_icon(int part);
 
+// Event screens (events.cpp): 64x40 framed scenes. arg is the advance for
+// Advance, the government for Government; civ is the player's colours,
+// other the rival's (who lost or took the city).
+enum class EventScene { Advance, Government, CityTaken, CityLost };
+Pixmap event_scene(EventScene kind, int arg, const CivColors &civ, const CivColors &other);
+int event_scene_width();
+int event_scene_height();
+
 // Food, shield and trade glyphs (7x7) for yield readouts.
 Pixmap yield_icon(int kind);
 

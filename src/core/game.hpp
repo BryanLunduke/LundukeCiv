@@ -176,6 +176,24 @@ struct Message {
     int turn = 0;
 };
 
+// Moments the human player sees a full screen for (event screens). The
+// window code takes them from Game::events and clears the list; they are
+// not saved.
+enum class EventKind : std::uint8_t {
+    Advance,      // arg: the advance learned
+    Government,   // arg: the new government
+    CityTaken,    // city: the city's id, arg: the old owner (civ is the new one)
+    CityLost,     // city: the city's id, arg: the new owner
+};
+
+struct GameEvent {
+    EventKind kind = EventKind::Advance;
+    int civ = -1;       // whose event
+    int arg = -1;
+    int city = -1;
+    std::string name;   // the city's name (it may be gone by the time it shows)
+};
+
 struct CombatResult {
     bool happened = false;
     UnitType att_type = UnitType::Militia;
@@ -319,6 +337,7 @@ public:
     int next_unit_id = 1;
     int next_city_id = 1;
     std::vector<Message> messages;
+    std::vector<GameEvent> events;   // for the human player only; see EventKind
     CombatResult last_combat;
     int winner = -1;           // civ that won by conquest or by reaching Alpha Centauri
     int civil_wars = 0;

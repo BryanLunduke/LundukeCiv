@@ -9,6 +9,7 @@
 
 #include "fame.hpp"
 #include "game.hpp"
+#include "options.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -731,6 +732,102 @@ static void test_ai_navy_build()
     CHECK_EQ(g.ai_navy_build(c), static_cast<int>(UnitType::Fighter));
 }
 
+// --- Event screens, Game Options, Find City ----------------------------------
+
+static void test_events()
+{
+    // The human player's advances (however they come), new governments and
+    // cities taken or lost make events; the computer's do not.
+    Game g = flat_game();
+    g.civs[1].ai = true;
+    g.events.clear();
+    g.learn(0, Advance::Pottery);
+    g.learn(1, Advance::Pottery);
+    CHECK_EQ(static_cast<long long>(g.events.size()), 1);
+    if (!g.events.empty()) {
+        CHECK(g.events[0].kind == EventKind::Advance);
+        CHECK_EQ(g.events[0].arg, static_cast<int>(Advance::Pottery));
+        CHECK_EQ(g.events[0].civ, 0);
+    }
+    g.events.clear();
+    town(g, 0, 10, 10, 3, "Capital");
+    g.learn(0, Advance::Monarchy);
+    g.events.clear();
+    g.revolution(0, Government::Monarchy);
+    for (int t = 0; t < 6 && g.civs[0].govt == Government::Anarchy; ++t) g.end_turn();
+    CHECK(g.civs[0].govt == Government::Monarchy);
+    bool govt = false;
+    for (const GameEvent &e : g.events) govt |= e.kind == EventKind::Government && e.arg == static_cast<int>(Government::Monarchy);
+    CHECK(govt);
+    // A city changes hands.
+    g.events.clear();
+    City &theirs = town(g, 1, 20, 10, 4, "Rival");
+    const int tid = theirs.id;
+    g.declare_war(0, 1);
+    g.move(place(g, 0, UnitType::Legion, 19, 10), 1, 0);   // into the empty city
+    CHECK_EQ(static_cast<long long>(g.events.size()), 1);
+    if (!g.events.empty()) {
+        CHECK(g.events[0].kind == EventKind::CityTaken);
+        CHECK_EQ(g.events[0].arg, 1);
+        CHECK_EQ(g.events[0].city, tid);
+        CHECK(g.events[0].name == "Rival");
+    }
+    g.events.clear();
+    town(g, 0, 30, 10, 4, "Ours");
+    g.move(place(g, 1, UnitType::Legion, 31, 10), -1, 0);
+    CHECK_EQ(static_cast<long long>(g.events.size()), 1);
+    if (!g.events.empty()) {
+        CHECK(g.events[0].kind == EventKind::CityLost);
+        CHECK_EQ(g.events[0].arg, 1);
+    }
+}
+
+static void test_options()
+{
+    // Game Options round trip; unknown lines and bad values keep defaults.
+    GameOptions o;
+    CHECK(o.autosave && o.end_of_turn && o.animations && o.enemy_moves && o.event_screens && !o.instant_advice);
+    o.instant_advice = true;
+    o.autosave = false;
+    o.end_of_turn = false;
+    o.enemy_moves = false;
+    const GameOptions r = load_options(save_options(o));
+    CHECK(r.instant_advice && !r.autosave && !r.end_of_turn && r.animations && !r.enemy_moves && r.event_screens);
+    const GameOptions junk = load_options("LUNDUKECIV OPTIONS 1\nautosave=maybe\nsound=1\nanimations=0\r\n");
+    CHECK(junk.autosave);
+    CHECK(!junk.animations);
+    // Autosave: every 50 turns, as in DOS, never on the first.
+    CHECK(!autosave_due(1));
+    CHECK(autosave_due(51));
+    CHECK(autosave_due(101));
+    CHECK(!autosave_due(50));
+    CHECK(!autosave_due(52));
+}
+
+static void test_find_city()
+{
+    // Our cities first, then the ones we have seen; any case; unseen ones
+    // stay hidden.
+    Game g = flat_game();
+    town(g, 0, 10, 10, 3, "Babylon");
+    town(g, 0, 16, 10, 3, "Athens");
+    town(g, 1, 30, 10, 3, "Antioch");
+    town(g, 1, 40, 20, 3, "Alexandria");
+    g.map.at(40, 20).explored = 0x02;   // only its owner knows it
+    std::vector<int> all = find_cities(g, 0, "");
+    CHECK_EQ(static_cast<long long>(all.size()), 3);
+    std::vector<int> a = find_cities(g, 0, "a");
+    CHECK_EQ(static_cast<long long>(a.size()), 2);
+    if (a.size() == 2) {
+        CHECK(g.city(a[0])->name == "Athens");
+        CHECK(g.city(a[1])->name == "Antioch");
+    }
+    std::vector<int> b = find_cities(g, 0, "BAB");
+    CHECK_EQ(static_cast<long long>(b.size()), 1);
+    CHECK(find_cities(g, 0, "Alex").empty());
+    CHECK_EQ(static_cast<long long>(find_cities(g, 1, "Alex").size()), 1);
+}
+
 int main(int argc, char **argv)
 {
     const std::map<std::string, std::function<void()>> tests = {
@@ -739,6 +836,7 @@ int main(int argc, char **argv)
         {"ai_specialists", test_ai_specialists}, {"ship_boarding", test_ship_boarding},
         {"ai_overseas_settling", test_ai_overseas_settling}, {"ai_invasion", test_ai_invasion},
         {"ai_naval_attack", test_ai_naval_attack}, {"ai_air_strike", test_ai_air_strike}, {"ai_navy_build", test_ai_navy_build},
+        {"events", test_events}, {"options", test_options}, {"find_city", test_find_city},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();
