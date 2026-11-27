@@ -371,6 +371,13 @@ public:
     int research_cost(int civ) const;
     static constexpr int kMinResearchCost = 10;   // no advance costs fewer bulbs
     void learn(int civ, Advance a);
+    // The DOS game asks what to study only when an advance is found: once
+    // bulbs are gathered toward one, the choice stands until it is found.
+    // Surplus bulbs are lost when an advance is found (research starts
+    // again from 0), and a human ruler loses the bulbs toward an advance
+    // that arrives some other way (learn).
+    bool can_change_research(int civ) const;
+    bool set_research(int civ, Advance a);   // false: not open to them, or the choice already stands
     bool can_build(const City &c, bool unit, int what) const;
     bool unit_available(int civ, UnitType u) const;
 
@@ -576,6 +583,8 @@ private:
     void kill_unit(int id);
     void kill_stack(int x, int y);
     void process_city(City &c, bool &learned_any);
+    void compute_city_stats(City &c);    // c.stats from its workers and specialists as they are
+    void ai_specialists(City &c);
     void check_research(int civ);         // the advance under study is found
     void update_tech_catchup();
     void start_turn_for(int civ);

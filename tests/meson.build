@@ -13,6 +13,6 @@ foreach t : ['empire_size', 'celebration', 'democracy_collapse', 'anarchy_length
   test(t, m4_tests, args: [t], timeout: 120, suite: 'm4')
 endforeach
 m5_tests = executable('m5_tests', files('m5_tests.cpp'), dependencies: civcore_dep)
-foreach t : ['score', 'end_2100', 'hall_of_fame', 'save_v6', 'huts', 'diplomats']
+foreach t : ['score', 'end_2100', 'hall_of_fame', 'save_v6', 'huts', 'diplomats', 'science_carryover', 'ai_specialists']
   test(t, m5_tests, args: [t], timeout: 120, suite: 'm5')
 endforeach

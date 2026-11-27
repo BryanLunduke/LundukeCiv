@@ -460,12 +460,99 @@ static void test_diplomats()
 
 // ---------------------------------------------------------------- research
 
+static void test_science_carryover()
+{
+    Game g = flat_game();
+    g.civs[0].ai = false;
+    g.civs[1].ai = true;
+    City &c = town(g, 0, 10, 10, 6, "Home");
+    (void)c;
+    // Surplus bulbs are lost when an advance is found.
+    g.civs[0].research = Advance::Alphabet;
+    const int cost = g.research_cost(0);
+    g.civs[0].bulbs = cost + 7;
+    g.end_turn();
+    CHECK(g.has(0, Advance::Alphabet));
+    CHECK(g.civs[0].bulbs < cost);   // only this turn's science, not the 7 over
+    // The choice stands once bulbs are gathered (DOS has no switching).
+    g.civs[0].research = Advance::Pottery;
+    g.civs[0].bulbs = 3;
+    CHECK(!g.can_change_research(0));
+    CHECK(!g.set_research(0, Advance::BronzeWorking));
+    CHECK(g.civs[0].research == Advance::Pottery);
+    g.civs[0].bulbs = 0;
+    CHECK(g.set_research(0, Advance::BronzeWorking));
+    CHECK(g.civs[0].research == Advance::BronzeWorking);
+    CHECK(!g.set_research(0, Advance::Monarchy));   // not open yet
+    // A human whose subject arrives another way loses the bulbs toward it.
+    g.civs[0].bulbs = 9;
+    g.learn(0, Advance::BronzeWorking);
+    CHECK(g.civs[0].research == Advance::None);
+    CHECK_EQ(g.civs[0].bulbs, 0);
+    CHECK(g.can_change_research(0));
+    // Learning something else keeps them.
+    g.civs[0].research = Advance::Pottery;
+    g.civs[0].bulbs = 9;
+    g.learn(0, Advance::Masonry);
+    CHECK_EQ(g.civs[0].bulbs, 9);
+    // A computer ruler keeps them (DOS).
+    g.civs[1].research = Advance::Pottery;
+    g.civs[1].bulbs = 9;
+    g.learn(1, Advance::Pottery);
+    CHECK_EQ(g.civs[1].bulbs, 9);
+}
 
+static void test_ai_specialists()
+{
+    // A computer city with more people than good land: the spare ones
+    // become scientists (taxmen when the treasury is low), and it stays in
+    // order.
+    auto setup = [](int gold) {
+        Game g = flat_game(Terrain::Tundra);
+        g.civs[1].ai = true;
+        g.civs[1].gold = gold;
+        g.civs[1].research = Advance::Alphabet;
+        City &c = town(g, 1, 20, 20, 8, "Crowded");
+        c.add(Building::Temple);
+        // Only the centre and a few squares are workable: the rest is ocean.
+        for (int j = -2; j <= 2; ++j)
+            for (int i = -2; i <= 2; ++i)
+                if (std::abs(i) + std::abs(j) > 1) g.map.at(20 + i, 20 + j).terrain = Terrain::Ocean;
+        g.map.label_continents();
+        g.update_city(c);
+        return g;
+    };
+    Game rich = setup(500);
+    const City &r = *rich.city_at(20, 20);
+    CHECK(r.specialists() > 0);
+    CHECK(r.scientists > 0);
+    CHECK_EQ(r.taxmen, 0);
+    CHECK(!r.stats.disorder);
+    Game poor = setup(0);
+    const City &p = *poor.city_at(20, 20);
+    CHECK(p.taxmen > 0);
+    CHECK_EQ(p.scientists, 0);
+    CHECK(!p.stats.disorder);
+    // Not below size 5, and never for a human ruler.
+    Game small = setup(500);
+    City &s = *small.city_at(20, 20);
+    s.size = 4;
+    small.update_city(s);
+    CHECK_EQ(s.taxmen + s.scientists, 0);
+    Game human = setup(500);
+    human.civs[1].ai = false;
+    City &h = *human.city_at(20, 20);
+    human.update_city(h);
+    CHECK_EQ(h.taxmen + h.scientists, 0);
+    CHECK(h.entertainers > 0);
+}
 
 int main(int argc, char **argv)
 {
     const std::map<std::string, std::function<void()>> tests = {
-        {"score", test_score}, {"end_2100", test_end_2100}, {"hall_of_fame", test_hall_of_fame}, {"save_v6", test_save_v6}, {"huts", test_huts}, {"diplomats", test_diplomats},
+        {"score", test_score}, {"end_2100", test_end_2100}, {"hall_of_fame", test_hall_of_fame}, {"save_v6", test_save_v6},
+        {"huts", test_huts}, {"diplomats", test_diplomats}, {"science_carryover", test_science_carryover},
+        {"ai_specialists", test_ai_specialists},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();
