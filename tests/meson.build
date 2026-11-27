@@ -9,6 +9,6 @@ endforeach
 m4_tests = executable('m4_tests', files('m4_tests.cpp'), dependencies: civcore_dep)
 foreach t : ['empire_size', 'celebration', 'democracy_collapse', 'anarchy_length', 'buy_cost', 'sell', 'barracks',
              'capture', 'nuke', 'trireme', 'air_targets', 'orders', 'disasters',
-             'treaties', 'senate', 'tribute', 'talks', 'ai_peace', 'civil_war', 'tribes', 'worlds']
+             'treaties', 'senate', 'tribute', 'talks', 'ai_peace', 'civil_war', 'tribes', 'worlds', 'databank']
   test(t, m4_tests, args: [t], timeout: 120, suite: 'm4')
 endforeach

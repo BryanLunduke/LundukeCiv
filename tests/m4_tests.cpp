@@ -6,6 +6,7 @@
 // civil war, happiness and celebrations, buying and selling, nuclear
 // attack, disasters, tribes and worlds. One named group per meson test.
 
+#include "databank.hpp"
 #include "game.hpp"
 
 #include <algorithm>
@@ -848,6 +849,53 @@ static void test_worlds()
     CHECK_EQ(static_cast<long long>(game.units.size()) >= 5, 1);
 }
 
+// ---------------------------------------------------------------- D: Databank
+
+static void test_databank()
+{
+    auto find = [](DatabankTopic t, const std::string &name) -> DatabankEntry {
+        for (const DatabankEntry &e : databank(t)) {
+            if (e.name == name) return e;
+        }
+        return DatabankEntry();
+    };
+    auto has = [](const DatabankEntry &e, const std::string &part) {
+        for (const std::string &f : e.facts) {
+            if (f.find(part) != std::string::npos) return true;
+        }
+        return false;
+    };
+    // Every unit that can be built, every advance, improvement, wonder,
+    // government and terrain has a page.
+    int units = 0;
+    for (int u = 0; u < kUnitTypeCount; ++u) units += !(unit_info(u).flags & kNoBuild);
+    CHECK_EQ(static_cast<long long>(databank(DatabankTopic::Units).size()), units);
+    CHECK_EQ(static_cast<long long>(databank(DatabankTopic::Advances).size()), kAdvanceCount);
+    CHECK_EQ(static_cast<long long>(databank(DatabankTopic::Improvements).size()), kBuildingCount);
+    CHECK_EQ(static_cast<long long>(databank(DatabankTopic::Wonders).size()), kWonderCount);
+    CHECK_EQ(static_cast<long long>(databank(DatabankTopic::Governments).size()), static_cast<int>(Government::Count));
+    CHECK_EQ(static_cast<long long>(databank(DatabankTopic::Terrain).size()), kTerrainCount);
+    for (int t = 0; t < static_cast<int>(DatabankTopic::Count); ++t)
+        for (const DatabankEntry &e : databank(static_cast<DatabankTopic>(t))) CHECK(!e.name.empty() && !e.facts.empty());
+    // Facts come from the tables.
+    const DatabankEntry musk = find(DatabankTopic::Units, "Musketeers");
+    CHECK(has(musk, "Attack " + std::to_string(unit_info(UnitType::Musketeers).attack) + ", defense 3, moves 1"));
+    CHECK(has(musk, "Requires: Gunpowder"));
+    CHECK(has(find(DatabankTopic::Units, "Trireme"), "lost half the time"));
+    CHECK(has(find(DatabankTopic::Units, "Bomber"), "only by Fighters"));
+    const DatabankEntry bronze = find(DatabankTopic::Advances, "Bronze Working");
+    CHECK(has(bronze, "Leads to: Currency"));
+    CHECK(has(bronze, "Colossus"));
+    CHECK(has(find(DatabankTopic::Advances, "Gunpowder"), "existing Barracks"));
+    const DatabankEntry gran = find(DatabankTopic::Improvements, "Granary");
+    CHECK(has(gran, "Prevents famine"));
+    CHECK(has(gran, "sells for"));
+    CHECK(has(find(DatabankTopic::Improvements, "SDI Defense"), "3 squares"));
+    CHECK(has(find(DatabankTopic::Governments, "Democracy"), "Senate"));
+    CHECK(has(find(DatabankTopic::Terrain, "Hills"), "Movement cost: 2"));
+    CHECK(std::string(databank_topic_name(DatabankTopic::Units)) == "Units");
+}
+
 // ---------------------------------------------------------------- runner
 
 int main(int argc, char **argv)
@@ -858,7 +906,7 @@ int main(int argc, char **argv)
         {"barracks", test_barracks}, {"capture", test_capture}, {"nuke", test_nuke}, {"trireme", test_trireme},
         {"air_targets", test_air_targets}, {"orders", test_orders}, {"disasters", test_disasters},
         {"treaties", test_treaties}, {"senate", test_senate}, {"tribute", test_tribute}, {"talks", test_talks},
-        {"ai_peace", test_ai_peace}, {"civil_war", test_civil_war}, {"tribes", test_tribes}, {"worlds", test_worlds},
+        {"ai_peace", test_ai_peace}, {"civil_war", test_civil_war}, {"tribes", test_tribes}, {"worlds", test_worlds}, {"databank", test_databank},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();
