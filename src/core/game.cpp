@@ -1272,7 +1272,7 @@ void Game::ai_barbarians(int bc)
 const char *diplo_action_name(DiploAction a)
 {
     static const char *n[] = {"Establish Embassy", "Investigate City", "Steal Technology", "Industrial Sabotage",
-                              "Incite a Revolt", "Bribe Unit"};
+                              "Incite a Revolt", "Meet with King", "Bribe Unit"};
     return n[static_cast<int>(a)];
 }
 
@@ -1336,6 +1336,7 @@ bool Game::diplomat_can(int unit_id, int tx, int ty, DiploAction a) const
         return false;
     }
     case DiploAction::Sabotage: return true;
+    case DiploAction::MeetKing: return !civs[c->owner].barbarian && civs[c->owner].alive;
     case DiploAction::Incite: {
         const int cost = incite_cost(*c, me);
         return cost > 0 && civs[me].gold >= cost;
@@ -1354,6 +1355,12 @@ std::string Game::diplomat_act(int unit_id, int tx, int ty, DiploAction a)
     const int them = c ? c->owner : owner_at(tx, ty);
     civs[me].contact |= static_cast<std::uint8_t>(1u << them);
     civs[them].contact |= static_cast<std::uint8_t>(1u << me);
+    if (a == DiploAction::MeetKing) {
+        // DOS: the audience costs the Diplomat its turn, not its life.
+        u->moves = 0;
+        u->order = Order::None;
+        return std::string();
+    }
     // Hostile acts against a people at peace are an incident: war.
     if (diplomat_hostile(a) && !at_war(me, them)) declare_war(me, them);
     std::string out;
@@ -1435,7 +1442,11 @@ std::string Game::diplomat_act(int unit_id, int tx, int ty, DiploAction a)
     default: break;
     }
     say(me, a == DiploAction::Investigate ? MsgKind::Info : MsgKind::Good, out, tx, ty);
-    kill_unit(unit_id);
+    if (diplomat_spent(a)) {
+        kill_unit(unit_id);
+    } else if (Unit *dip = unit(unit_id)) {
+        dip->moves = 0;   // a bribe takes the Diplomat's turn
+    }
     if (a == DiploAction::Incite) check_elimination();
     return out;
 }
@@ -1804,7 +1815,11 @@ MoveResult Game::move(int unit_id, int dx, int dy)
     (void)fx;
     (void)fy;
     reveal(u->owner, tx, ty, (i.flags & kSight2) ? 2 : 1);
-    if (map.at(tx, ty).hut && i.domain == Domain::Land) enter_hut(*u);
+    if (map.at(tx, ty).hut && i.domain == Domain::Land) {
+        enter_hut(unit_id);   // may add units: look the unit up again
+        u = unit(unit_id);
+        if (!u) return result;
+    }
     if (u->type == UnitType::Caravan) {
         const City *c = city_at(tx, ty);
         if (c && c->owner == u->owner && (caravan_can_help(*u, *c) || caravan_can_trade(*u, *c))) result = MoveResult::Caravan;
@@ -2068,32 +2083,107 @@ void Game::natural_disasters()
     }
 }
 
-void Game::enter_hut(Unit &u)
+// A village of a minor tribe (DOS UnitManagement FoundMinorTribeHut): one
+// of four rolls, shaped by how far the nearest city of anyone's stands.
+//   0: four or more squares off -- an advanced tribe becomes a free city
+//      when that is four or five squares; further out, 50 gold. Closer:
+//      mercenaries.
+//   1: before 1000 AD, an advance (never Future Tech); after, 50 gold.
+//   2: 50 gold.
+//   3: within three squares, or with no city of our own: mercenaries;
+//      otherwise a horde of barbarians.
+// Mercenaries are a Legion or Cavalry; the horde is Cavalry on open
+// ground and Legions in rough, one to eight of them by how few cities we
+// have. Aircraft fly over; the raiders find nothing.
+HutOutcome Game::hut_outcome(int owner, int x, int y, int roll) const
 {
-    Tile &t = map.at(u.x, u.y);
-    t.hut = false;
-    const int roll = rng.below(100);
-    const int owner = u.owner;
-    if (roll < 35) {
-        civs[owner].gold += 50;
-        say(owner, MsgKind::Good, "You find 50 gold in the ruins of an old village.", u.x, u.y);
-    } else if (roll < 60) {
+    int nearest = 1 << 30;
+    for (const City &c : cities) nearest = std::min(nearest, map.distance(x, y, c.x, c.y));
+    int own = 0;
+    for (const City &c : cities) own += c.owner == owner;
+    switch (roll) {
+    case 0:
+        if (nearest > 3) return nearest < 6 ? HutOutcome::FreeCity : HutOutcome::Gold;
+        return HutOutcome::Mercenaries;
+    case 1: return (turn <= 1 || year_for_turn(turn) > 1000) ? HutOutcome::Gold : HutOutcome::Advance;
+    case 2: return HutOutcome::Gold;
+    default: return (nearest < 4 || own == 0) ? HutOutcome::Mercenaries : HutOutcome::Barbarians;
+    }
+}
+
+void Game::enter_hut(int unit_id)
+{
+    Unit *u = unit(unit_id);
+    if (!u) return;
+    const int x = u->x, y = u->y, owner = u->owner;
+    map.at(x, y).hut = false;
+    if (civs[owner].barbarian || unit_info(u->type).domain == Domain::Air) return;
+    HutOutcome out = hut_outcome(owner, x, y, rng.below(4));
+    if (out == HutOutcome::Advance) {
         std::vector<Advance> opts = researchable(owner);
         opts.erase(std::remove(opts.begin(), opts.end(), Advance::FutureTech), opts.end());
-        if (!opts.empty()) {
-            const Advance a = opts[rng.below(static_cast<int>(opts.size()))];
-            learn(owner, a);
-            say(owner, MsgKind::Tech, std::string("Wise elders of the village teach you ") + advance_info(a).name + ".", u.x, u.y);
+        if (opts.empty()) {
+            out = HutOutcome::Gold;
         } else {
-            civs[owner].gold += 25;
+            const Advance a = opts[rng.below(static_cast<int>(opts.size()))];
+            say(owner, MsgKind::Tech, std::string("You have discovered scrolls of ancient wisdom: the secret of ") + advance_info(a).name + ".", x, y);
+            learn(owner, a);
+            if (civs[owner].ai && civs[owner].research == Advance::None) choose_research_ai(owner);
+            return;
         }
-    } else if (roll < 85) {
-        const int id = add_unit(owner, UnitType::Legion, u.x, u.y, -1);
-        if (Unit *m = unit(id)) m->moves = 0;
-        say(owner, MsgKind::Good, "A band of mercenaries joins you: a Legion.", u.x, u.y);
-    } else {
-        say(owner, MsgKind::Info, "The village is long abandoned.", u.x, u.y);
     }
+    const int bc = barbarian_civ();
+    if (out == HutOutcome::Barbarians && bc < 0) out = HutOutcome::Mercenaries;
+    if (out == HutOutcome::FreeCity && make_city(owner, x, y) < 0) out = HutOutcome::Gold;
+    switch (out) {
+    case HutOutcome::Gold:
+        civs[owner].gold += 50;
+        say(owner, MsgKind::Good, "You have discovered valuable metal deposits worth 50 gold.", x, y);
+        break;
+    case HutOutcome::FreeCity:
+        say(owner, MsgKind::Good, "You have discovered an advanced tribe. They join you as the city of " + city_at(x, y)->name + ".", x, y);
+        break;
+    case HutOutcome::Mercenaries: {
+        const UnitType t = rng.below(2) ? UnitType::Legion : UnitType::Cavalry;
+        add_unit(owner, t, x, y, -1);
+        say(owner, MsgKind::Good, std::string("You have discovered a friendly tribe of skilled mercenaries: a ") + unit_info(t).name + " joins you.", x, y);
+        break;
+    }
+    case HutOutcome::Barbarians: {
+        // Around the village, every square or every second, third or
+        // fourth one: 8 raiders against three cities or more, 4 against
+        // two, 3 against one.
+        int own = 0;
+        for (const City &c : cities) own += c.owner == owner;
+        const int step = std::clamp(4 - own, 1, 4);
+        static const int kDirs[8][2] = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
+        int n = 0;
+        for (int k = 0; k < 8; k += step) {
+            const int nx = map.wrap_x(x + kDirs[k][0]), ny = y + kDirs[k][1];
+            if (!map.valid_y(ny) || !map.land(nx, ny) || city_at(nx, ny) || owner_at(nx, ny) >= 0) continue;
+            const UnitType t = terrain_info(map.at(nx, ny).terrain).move < 3 ? UnitType::Cavalry : UnitType::Legion;
+            add_unit(bc, t, nx, ny, -1);
+            ++n;
+        }
+        civs[owner].contact |= static_cast<std::uint8_t>(1u << bc);
+        say(owner, MsgKind::Bad, "You have unleashed a horde of barbarians! " + std::to_string(n) + (n == 1 ? " raider" : " raiders") + " pour out of the village.", x, y);
+        break;
+    }
+    default: break;
+    }
+}
+
+int Game::make_city(int owner, int x, int y)
+{
+    x = map.wrap_x(x);
+    if (!map.valid_y(y) || !map.land(x, y) || city_at(x, y)) return -1;
+    const int s = add_unit(owner, UnitType::Settlers, x, y, -1);
+    const int id = next_city_id;
+    if (!found_city(s)) {
+        kill_unit(s);
+        return -1;
+    }
+    return id;
 }
 
 void Game::capture_city(City &c, int new_owner)

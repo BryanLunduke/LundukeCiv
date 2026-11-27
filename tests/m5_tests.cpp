@@ -304,7 +304,159 @@ static void test_save_v6()
 
 // ---------------------------------------------------------------- villages and Diplomats
 
+static void test_huts()
+{
+    Game g = flat_game();
+    g.turn = turn_for_year(-2000);
+    // Roll 0: 4-5 squares from the nearest city, a free city; further, 50
+    // gold; closer, mercenaries.
+    town(g, 1, 20, 20, 3, "Them");
+    CHECK(g.hut_outcome(0, 24, 20, 0) == HutOutcome::FreeCity);
+    CHECK(g.hut_outcome(0, 25, 20, 0) == HutOutcome::FreeCity);
+    CHECK(g.hut_outcome(0, 26, 20, 0) == HutOutcome::Gold);
+    CHECK(g.hut_outcome(0, 23, 20, 0) == HutOutcome::Mercenaries);
+    // Roll 1: an advance before 1000 AD, gold after (and on the first turn).
+    CHECK(g.hut_outcome(0, 30, 20, 1) == HutOutcome::Advance);
+    g.turn = turn_for_year(1010);
+    CHECK(g.hut_outcome(0, 30, 20, 1) == HutOutcome::Gold);
+    g.turn = 1;
+    CHECK(g.hut_outcome(0, 30, 20, 1) == HutOutcome::Gold);
+    g.turn = turn_for_year(-2000);
+    CHECK(g.hut_outcome(0, 30, 20, 2) == HutOutcome::Gold);
+    // Roll 3: with no city of our own, or close to one, mercenaries;
+    // otherwise barbarians.
+    CHECK(g.hut_outcome(0, 30, 20, 3) == HutOutcome::Mercenaries);
+    town(g, 0, 40, 20, 3, "Ours");
+    CHECK(g.hut_outcome(0, 30, 20, 3) == HutOutcome::Barbarians);
+    CHECK(g.hut_outcome(0, 22, 20, 3) == HutOutcome::Mercenaries);
 
+    // Entering villages, many times over: every outcome is one of the five
+    // and never an empty village.
+    int seen[5] = {};
+    for (int k = 0; k < 120; ++k) {
+        Game h = flat_game();
+        h.rng.state = 1000 + static_cast<unsigned>(k) * 7919u;
+        h.turn = turn_for_year(-2000);
+        town(h, 0, 10, 10, 3, "Home");
+        const int dist = 2 + k % 6;   // 2, 3: mercenaries likely; 4, 5: a free city possible; 6, 7: not
+        h.map.at(10 + dist, 10).hut = true;
+        const int u = place(h, 0, UnitType::Legion, 9 + dist, 10);
+        const int gold = h.civs[0].gold, techs = h.techs_known(0), units = static_cast<int>(h.units.size());
+        h.move(u, 1, 0);
+        CHECK(!h.map.at(10 + dist, 10).hut);
+        CHECK(!said(h, "abandoned"));
+        const City *fc = h.city_at(10 + dist, 10);
+        if (fc) {
+            ++seen[static_cast<int>(HutOutcome::FreeCity)];
+            CHECK(dist < 6);
+            CHECK_EQ(fc->owner, 0);
+            CHECK_EQ(fc->size, 1);
+        } else if (h.civs[0].gold == gold + 50) {
+            ++seen[static_cast<int>(HutOutcome::Gold)];
+        } else if (h.techs_known(0) == techs + 1) {
+            ++seen[static_cast<int>(HutOutcome::Advance)];
+        } else {
+            int raiders = 0, mercs = 0;
+            for (const Unit &v : h.units) {
+                raiders += h.civs[v.owner].barbarian;
+                mercs += v.owner == 0 && v.id != u && (v.type == UnitType::Legion || v.type == UnitType::Cavalry);
+            }
+            if (raiders) {
+                ++seen[static_cast<int>(HutOutcome::Barbarians)];
+                CHECK_EQ(raiders, 3);   // one city: every third square of eight
+            } else {
+                CHECK_EQ(mercs, 1);
+                CHECK_EQ(static_cast<long long>(h.units.size()), units + 1);
+                ++seen[static_cast<int>(HutOutcome::Mercenaries)];
+            }
+        }
+    }
+    for (int k = 0; k < 5; ++k) {
+        if (seen[k] == 0) std::fprintf(stderr, "hut outcome %d never seen\n", k);
+        CHECK(seen[k] > 0);
+    }
+    // The horde grows with the cities: 4 against two, 8 against three.
+    for (int cities = 2; cities <= 3; ++cities) {
+        Game h = flat_game();
+        h.turn = turn_for_year(-2000);
+        for (int k = 0; k < cities; ++k) town(h, 0, 10, 10 + k * 4, 3, "Home");
+        bool done = false;
+        for (unsigned seed = 1; seed < 400 && !done; ++seed) {
+            Game t = h;
+            t.rng.state = seed;
+            t.map.at(30, 30).hut = true;
+            const int u = place(t, 0, UnitType::Legion, 29, 30);
+            t.move(u, 1, 0);
+            int raiders = 0;
+            for (const Unit &v : t.units) raiders += t.civs[v.owner].barbarian;
+            if (raiders) {
+                CHECK_EQ(raiders, cities == 2 ? 4 : 8);
+                done = true;
+            }
+        }
+        CHECK(done);
+    }
+    // Aircraft fly over a village and find nothing in it.
+    Game a = flat_game();
+    a.map.at(21, 20).hut = true;
+    const int f = place(a, 0, UnitType::Fighter, 20, 20);
+    const int gold = a.civs[0].gold;
+    a.move(f, 1, 0);
+    CHECK(a.map.at(21, 20).hut);
+    CHECK_EQ(a.civs[0].gold, gold);
+}
+
+static void test_diplomats()
+{
+    Game g = flat_game();
+    town(g, 1, 20, 20, 5, "Capital");   // their first city: the Palace
+    City &other = town(g, 1, 26, 20, 5, "Other");
+    const int oid = other.id;
+    g.learn(1, Advance::Writing);
+    // Meet with King: the Diplomat lives and its turn ends; no war.
+    int d = place(g, 0, UnitType::Diplomat, 21, 20);
+    CHECK(g.diplomat_can(d, 20, 20, DiploAction::MeetKing));
+    CHECK(g.diplomat_act(d, 20, 20, DiploAction::MeetKing).empty());
+    CHECK(g.unit(d) != nullptr);
+    CHECK_EQ(g.unit(d)->moves, 0);
+    CHECK(!g.at_war(0, 1));
+    CHECK(std::string(diplo_action_name(DiploAction::MeetKing)) == "Meet with King");
+    // Not with the raiders.
+    const int bc = g.barbarian_civ();
+    town(g, bc, 40, 20, 3, "Camp");
+    const int d2 = place(g, 0, UnitType::Diplomat, 41, 20);
+    CHECK(!g.diplomat_can(d2, 40, 20, DiploAction::MeetKing));
+    // Every other city action spends it.
+    const DiploAction spent[] = {DiploAction::Embassy, DiploAction::Investigate, DiploAction::StealTech, DiploAction::Sabotage};
+    for (DiploAction a : spent) {
+        const int k = place(g, 0, UnitType::Diplomat, 27, 20);
+        CHECK(g.diplomat_can(k, 26, 20, a));
+        CHECK(!g.diplomat_act(k, 26, 20, a).empty());
+        CHECK(g.unit(k) == nullptr);
+    }
+    // Nothing left to steal here: the attempt is refused and costs nothing.
+    const int k2 = place(g, 0, UnitType::Diplomat, 27, 20);
+    CHECK(!g.diplomat_can(k2, 26, 20, DiploAction::StealTech));
+    CHECK(g.diplomat_act(k2, 26, 20, DiploAction::StealTech).empty());
+    CHECK(g.unit(k2) != nullptr);
+    // Incite spends it.
+    g.civs[0].gold = 5000;
+    CHECK(g.diplomat_can(k2, 26, 20, DiploAction::Incite));
+    CHECK(!g.diplomat_act(k2, 26, 20, DiploAction::Incite).empty());
+    CHECK(g.unit(k2) == nullptr);
+    CHECK_EQ(g.city(oid)->owner, 0);
+    // Bribing a unit leaves the Diplomat standing, its turn over.
+    const int v = place(g, 1, UnitType::Legion, 31, 30);
+    const int k3 = place(g, 0, UnitType::Diplomat, 30, 30);
+    CHECK(g.diplomat_can(k3, 31, 30, DiploAction::Bribe));
+    CHECK(!g.diplomat_act(k3, 31, 30, DiploAction::Bribe).empty());
+    CHECK(g.unit(k3) != nullptr);
+    CHECK_EQ(g.unit(k3)->moves, 0);
+    CHECK_EQ(g.unit(v)->owner, 0);
+    CHECK(Game::diplomat_spent(DiploAction::Embassy));
+    CHECK(!Game::diplomat_spent(DiploAction::MeetKing));
+    CHECK(!Game::diplomat_spent(DiploAction::Bribe));
+}
 
 // ---------------------------------------------------------------- research
 
@@ -313,7 +465,7 @@ static void test_save_v6()
 int main(int argc, char **argv)
 {
     const std::map<std::string, std::function<void()>> tests = {
-        {"score", test_score}, {"end_2100", test_end_2100}, {"hall_of_fame", test_hall_of_fame}, {"save_v6", test_save_v6},
+        {"score", test_score}, {"end_2100", test_end_2100}, {"hall_of_fame", test_hall_of_fame}, {"save_v6", test_save_v6}, {"huts", test_huts}, {"diplomats", test_diplomats},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();

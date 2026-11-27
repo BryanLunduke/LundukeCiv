@@ -199,7 +199,14 @@ enum class MoveResult : std::uint8_t {
     Caravan,    // a Caravan reached a city: help a wonder or open a trade route
 };
 
-enum class DiploAction : std::uint8_t { Embassy, Investigate, StealTech, Sabotage, Incite, Bribe, Count };
+// What a village of a minor tribe holds (DOS).
+enum class HutOutcome : std::uint8_t { Gold, Advance, Mercenaries, Barbarians, FreeCity };
+
+// What a Diplomat may do. As in DOS, a Diplomat is spent on every action
+// in a city -- except Meet with King, which only ends its turn, and an
+// attempt that comes to nothing (no advance to steal). Bribing a unit
+// leaves the Diplomat in the field.
+enum class DiploAction : std::uint8_t { Embassy, Investigate, StealTech, Sabotage, Incite, MeetKing, Bribe, Count };
 const char *diplo_action_name(DiploAction a);
 constexpr int kMaxRoutes = 3;
 
@@ -513,10 +520,16 @@ public:
 
     // --- diplomats and caravans
     bool diplomat_can(int unit_id, int tx, int ty, DiploAction a) const;
-    bool diplomat_hostile(DiploAction a) const { return a != DiploAction::Embassy && a != DiploAction::Investigate; }
+    bool diplomat_hostile(DiploAction a) const
+    {
+        return a != DiploAction::Embassy && a != DiploAction::Investigate && a != DiploAction::MeetKing;
+    }
+    static bool diplomat_spent(DiploAction a) { return a != DiploAction::MeetKing && a != DiploAction::Bribe; }
     int incite_cost(const City &c, int civ) const;   // gold, -1 if it cannot be incited
     int bribe_cost(const Unit &u, int civ) const;
-    // Carries out the action; the Diplomat is spent. Returns what happened.
+    // Carries out the action (see DiploAction for when the Diplomat is
+    // spent). Returns what happened. Meet with King returns an empty string:
+    // the audience itself is the window code's (Proposal, propose).
     std::string diplomat_act(int unit_id, int tx, int ty, DiploAction a);
     bool caravan_can_help(const Unit &u, const City &c) const;
     bool caravan_can_trade(const Unit &u, const City &c) const;
@@ -530,6 +543,8 @@ public:
     bool is_barbarian(int civ) const { return civ >= 0 && civ < static_cast<int>(civs.size()) && civs[civ].barbarian; }
     void spawn_barbarians(bool force_sea = false, bool force_land = false);
     int ransom(int unit_id, int tx, int ty);        // capture lone barbarian leaders: gold won
+    // --- villages: what roll (0..3) gives for a unit of `owner` at x, y
+    HutOutcome hut_outcome(int owner, int x, int y, int roll) const;
 
     // --- space race
     bool space_open() const;                        // the Apollo Program stands somewhere
@@ -566,7 +581,8 @@ private:
     void start_turn_for(int civ);
     void new_turn();
     void reveal(int civ, int x, int y, int r);
-    void enter_hut(Unit &u);
+    void enter_hut(int unit_id);
+    int make_city(int owner, int x, int y);   // a city with no Settlers (a hut's advanced tribe); its id
     void capture_city(City &c, int new_owner);
     std::string next_city_name(int civ);
     void set_tribe(int civ, int tribe);   // name, leader, colour and cities of a Civ 1 people
