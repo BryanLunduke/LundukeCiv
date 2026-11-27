@@ -53,7 +53,7 @@ The top band shows the empire: civilization, year, treasury, tax · luxury · sc
 | Click | Select a unit, open a city, move next door |
 | Right click | Center the map there |
 
-Clicking a city opens its screen: citizens, food/shield/trade, food box, supported units, the 21-square city radius (click a square to move a worker), production with Change and Buy, and the improvements already built.
+Clicking a city opens its screen: citizens, food/shield/trade, food box, supported units, the 21-square city radius (click a square to move a worker), production with Change and Buy, and the improvements already built. Citizens taken off the land become specialists, shown after the workers: click one, in a city of size 5 or more, to turn an entertainer (+2 luxuries) into a taxman (+2 gold), a taxman into a scientist (+2 bulbs) and a scientist back into an entertainer, as in the DOS game. Specialists count before the Marketplace, Bank, Library and University multiply the city's output; under Anarchy scientists find nothing. Smaller cities, and cities placed automatically, only keep entertainers.
 
 ## Rules
 
@@ -71,7 +71,7 @@ The space race opens once anyone completes the Apollo Program. Cities then build
 
 Controllers work as in Lunduke City 2, made for the Steam Deck at 1280x800. The D-pad or left stick moves a tile cursor; A moves or attacks next door, opens the unit's orders on the unit itself, opens one of your cities, or sends the unit further away; B backs out (on the map: back to the unit, then wait); X opens the orders menu; Y founds a city with Settlers or fortifies troops; L1/R1 cycle units; View ends the turn; the Menu button opens the menus. In menus and dialogs the D-pad moves a gold focus between buttons, rows and city squares, A chooses and B closes. The triggers zoom, the right stick scrolls the map and the stick clicks center the view. The bottom bar shows the buttons as key caps, named for the pad in hand (Deck, Xbox or PlayStation); on a Deck (SteamDeck=1) the hints stay on even when the touchpad or keyboard is used. F1 lists both keyboard and controller bindings.
 
-Approximated or not yet: corruption and research cost use simple formulas close to the DOS numbers, and specialists are entertainers only. Combat is fought in rounds with hit points (10 per unit) rather than the DOS single roll. A Wonder goes obsolete when its owner learns the obsoleting advance. Diplomats are always used up, and trade route income is an approximation. Barbarian cities only raise a few troops, and raiders burn towns of size 1 or 2 instead of holding them. The spaceship's flight time and success chance use simplified formulas, and the spaceship screen lists rival ships even without an embassy.
+Approximated or not yet: corruption and research cost use simple formulas close to the DOS numbers. Combat is fought in rounds with hit points (10 per unit) rather than the DOS single roll. A Wonder goes obsolete when its owner learns the obsoleting advance. Diplomats are always used up, and trade route income is an approximation. Barbarian cities only raise a few troops, and raiders burn towns of size 1 or 2 instead of holding them. The spaceship's flight time and success chance use simplified formulas, and the spaceship screen lists rival ships even without an embassy.
 
 The computer players research toward Monarchy, Currency, Writing and Trade first and expand early. They keep settlers irrigating and mining around their cities and build Temples, Granaries, Libraries, Marketplaces, Aqueducts and the like before Wonders, caravans or more troops. They garrison cities and rush-buy a defender when enemies come close. They attack enemy and barbarian cities on their own continent, buy, declare war and make peace, and build and launch a modest spaceship. They do not use ships or aircraft yet. Civ-style, computer rulers get a level handicap: their food boxes and build costs are 110% on Chieftain, 90% Warlord, 75% Prince, 65% King and 55% Emperor.
 
@@ -83,7 +83,7 @@ The computer players research toward Monarchy, Currency, Writing and Trade first
 | `src/art` | Original pixel art: terrain painter, rivers, cities, unit counters, icons |
 | `src/ui` | The Lunduke City 2-style interface: band, sidebar, map, dialogs |
 | `src/main.cpp` | SDL3 window, input, Cairo surface → texture |
-| `tests` | `meson test`: calendar, yields, tech tree, unit table, combat, growth, settlers, movement, save round trip, AI smoke game, wonders, envoys, railroads, no pollution, barbarians, space race, controller navigation |
+| `tests` | `meson test`: calendar, yields, tech tree, unit table, combat, growth, settlers, movement, save round trip, AI smoke game, wonders, envoys, railroads, no pollution, specialists, barbarians, space race, controller navigation |
 | `packaging/windows`, `cross` | Windows cross build |
 
 ## License

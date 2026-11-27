@@ -897,6 +897,121 @@ static void test_no_pollution()
     CHECK(save_game(x) == again);
 }
 
+// Specialists as in the DOS game: an entertainer makes 2 luxuries, a
+// taxman 2 gold, a scientist 2 bulbs, all before the Marketplace, Bank,
+// Library and University multiply them. Clicking one cycles entertainer ->
+// taxman -> scientist -> entertainer, but only in a city of size 5 or more.
+static void test_specialists()
+{
+    Game g = flat_game();
+    g.difficulty = Difficulty::Chieftain;   // six content citizens: no disorder to settle
+    g.civs[0].govt = Government::Monarchy;
+    g.civs[0].tax = 4;
+    g.civs[0].lux = 0;
+    g.civs[0].sci = 6;
+    const int s = place(g, 0, UnitType::Settlers, 20, 20);
+    CHECK(g.found_city(s, "Specton"));
+    const int cid = g.cities.back().id;
+    City *c = g.city(cid);
+    c->size = 4;
+    g.update_city(*c);
+    CHECK_EQ(c->specialists(), 0);
+    // Take a worker off the land: an entertainer. Too small for taxmen.
+    const auto w0 = c->worked.front();
+    g.toggle_tile(cid, w0.first, w0.second);
+    c = g.city(cid);
+    CHECK_EQ(c->entertainers, 1);
+    CHECK(!g.cycle_specialist(cid, 0));
+    CHECK_EQ(c->entertainers, 1);
+    CHECK_EQ(c->taxmen, 0);
+
+    // Size 6 with two specialists.
+    c->size = 6;
+    c->manual = false;
+    g.update_city(*c);
+    for (int k = 0; k < 2; ++k) {
+        const auto w = c->worked.back();
+        g.toggle_tile(cid, w.first, w.second);
+    }
+    CHECK(c->manual);
+    CHECK_EQ(c->entertainers, 2);
+    const CityStats two_ent = c->stats;
+    CHECK_EQ(two_ent.happy + two_ent.content + two_ent.unhappy, 4);   // specialists are neither
+    CHECK(g.cycle_specialist(cid, 0));                                 // entertainer -> taxman
+    CHECK_EQ(c->entertainers, 1);
+    CHECK_EQ(c->taxmen, 1);
+    CHECK_EQ(c->stats.tax, two_ent.tax + 2);
+    CHECK_EQ(c->stats.lux, two_ent.lux - 2);
+    CHECK_EQ(c->stats.sci, two_ent.sci);
+    CHECK(g.cycle_specialist(cid, 1));                                 // taxman -> scientist
+    CHECK_EQ(c->taxmen, 0);
+    CHECK_EQ(c->scientists, 1);
+    CHECK_EQ(c->stats.tax, two_ent.tax);
+    CHECK_EQ(c->stats.sci, two_ent.sci + 2);
+    CHECK(g.cycle_specialist(cid, 1));                                 // scientist -> entertainer
+    CHECK_EQ(c->scientists, 0);
+    CHECK_EQ(c->entertainers, 2);
+    CHECK_EQ(c->stats.lux, two_ent.lux);
+    CHECK(!g.cycle_specialist(cid, 2));                                // no third specialist
+
+    // One of each kind, then a Library and a Marketplace multiply them.
+    CHECK(g.cycle_specialist(cid, 0));                                 // ent, tax
+    CHECK(g.cycle_specialist(cid, 0));                                 // tax, tax
+    CHECK(g.cycle_specialist(cid, 1));                                 // tax, sci
+    CHECK_EQ(c->taxmen, 1);
+    CHECK_EQ(c->scientists, 1);
+    const int land_tax = two_ent.tax, land_sci = two_ent.sci;
+    c->add(Building::Library);
+    c->add(Building::Marketplace);
+    g.update_city(*c);
+    CHECK_EQ(c->stats.sci, (land_sci + 2) * 150 / 100);
+    CHECK_EQ(c->stats.tax, (land_tax + 2) * 3 / 2);
+
+    // Saved and loaded.
+    Game back;
+    CHECK(load_game(save_game(g), back));
+    if (const City *bc = back.city(cid)) {
+        CHECK_EQ(bc->taxmen, 1);
+        CHECK_EQ(bc->scientists, 1);
+        CHECK_EQ(bc->stats.tax, c->stats.tax);
+    }
+
+    // Putting a specialist back to work takes an entertainer first, then
+    // a taxman, then a scientist.
+    {
+        int fx = 9, fy = 9;
+        for (int dy = -2; dy <= 2 && fx == 9; ++dy)
+            for (int dx = -2; dx <= 2 && fx == 9; ++dx) {
+                if ((!dx && !dy) || (std::abs(dx) == 2 && std::abs(dy) == 2)) continue;
+                bool used = false;
+                for (const auto &w : c->worked) used |= w.first == dx && w.second == dy;
+                if (!used) fx = dx, fy = dy;
+            }
+        g.toggle_tile(cid, fx, fy);
+    }
+    CHECK_EQ(c->specialists(), 1);
+    CHECK_EQ(c->taxmen, 0);
+    CHECK_EQ(c->scientists, 1);
+
+    // Under Anarchy scientists find nothing; taxmen still collect.
+    c->remove(Building::Library);
+    c->remove(Building::Marketplace);
+    g.civs[0].govt = Government::Anarchy;
+    g.update_city(*c);
+    CHECK_EQ(c->stats.sci, 0);
+    CHECK(g.cycle_specialist(cid, 0));                                 // scientist -> entertainer
+    CHECK(g.cycle_specialist(cid, 0));                                 // -> taxman
+    CHECK_EQ(c->stats.tax, 2);
+    g.civs[0].govt = Government::Monarchy;
+
+    // A city that shrinks below 5 keeps only entertainers.
+    c->size = 4;
+    g.update_city(*c);
+    CHECK_EQ(c->taxmen, 0);
+    CHECK_EQ(c->scientists, 0);
+    CHECK_EQ(c->entertainers, c->size - static_cast<int>(c->worked.size()));
+}
+
 static void test_barbarians()
 {
     Game g = flat_game();
@@ -1079,7 +1194,7 @@ int main(int argc, char **argv)
         {"units_table", test_units_table}, {"combat_odds", test_combat_odds},       {"city_growth", test_city_growth},
         {"settlers_work", test_settlers_work}, {"movement", test_movement},          {"save_roundtrip", test_save_roundtrip},
         {"ai_smoke", test_ai_smoke},           {"wonders", test_wonders}, {"envoys", test_envoys},
-        {"railroads", test_railroads}, {"no_pollution", test_no_pollution}, {"barbarians", test_barbarians}, {"space_race", test_space_race}, {"pad_nav", test_pad_nav},
+        {"railroads", test_railroads}, {"no_pollution", test_no_pollution}, {"specialists", test_specialists}, {"barbarians", test_barbarians}, {"space_race", test_space_race}, {"pad_nav", test_pad_nav},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();

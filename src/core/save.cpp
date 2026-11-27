@@ -118,7 +118,7 @@ std::string save_game(const Game &g)
           << c.food << "|" << c.shields << "|" << c.build_unit << "|" << c.build << "|" << c.buildings << "|"
           << c.entertainers << "|" << c.manual << "|" << c.founded << "|" << c.bought << "|" << worked << "|";
         for (size_t r = 0; r < c.routes.size(); ++r) o << (r ? "," : "") << c.routes[r];
-        o << "|" << static_cast<int>(c.stolen) << "\n";
+        o << "|" << static_cast<int>(c.stolen) << "|" << c.taxmen << "|" << c.scientists << "\n";
     }
     for (const Unit &u : g.units) {
         o << "unit|" << u.id << "|" << static_cast<int>(u.type) << "|" << u.owner << "|" << u.x << "|" << u.y << "|"
@@ -261,6 +261,8 @@ bool load_game(const std::string &text, Game &out, std::string *error)
                 }
             }
             c.stolen = static_cast<std::uint8_t>(num(f, 18));
+            c.taxmen = std::max(0, static_cast<int>(num(f, 19)));
+            c.scientists = std::max(0, static_cast<int>(num(f, 20)));
             g.cities.push_back(c);
         } else if (k == "unit") {
             Unit u;

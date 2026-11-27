@@ -553,7 +553,7 @@ void Game::arrange_workers(City &c)
         if (!tile_free_for(c, x, y)) continue;
         cands.push_back({o[0], o[1], tile_yield(x, y, c.owner, false)});
     }
-    int workers = std::max(0, c.size - c.entertainers);
+    int workers = std::max(0, c.size - c.specialists());
     const Yield centre = tile_yield(c.x, c.y, c.owner, true);
     int food = centre.food;
     const int need = c.size * 2 + 2; // eaters plus room to grow
@@ -568,13 +568,22 @@ void Game::arrange_workers(City &c)
         cands.erase(best);
     }
     // Not enough land: the rest entertain.
-    c.entertainers = c.size - static_cast<int>(c.worked.size());
+    settle_specialists(c);
+}
+
+void Game::settle_specialists(City &c) const
+{
+    const int total = std::max(0, c.size - static_cast<int>(c.worked.size()));
+    if (c.size < kSpecialistSize) c.taxmen = c.scientists = 0;
+    c.taxmen = std::clamp(c.taxmen, 0, total);
+    c.scientists = std::clamp(c.scientists, 0, total - c.taxmen);
+    c.entertainers = total - c.taxmen - c.scientists;
 }
 
 void Game::update_city(City &c)
 {
     if (!c.manual) {
-        c.entertainers = 0;
+        c.entertainers = c.taxmen = c.scientists = 0;
         arrange_workers(c);
     } else {
         // Drop tiles that became unavailable.
@@ -582,8 +591,10 @@ void Game::update_city(City &c)
         for (const auto &w : c.worked) {
             if (tile_free_for(c, c.x + w.first, c.y + w.second)) keep.push_back(w);
         }
+        // A city that shrank has fewer workers to place.
+        if (static_cast<int>(keep.size()) > c.size) keep.resize(static_cast<size_t>(std::max(0, c.size)));
         c.worked = keep;
-        c.entertainers = std::max(0, c.size - static_cast<int>(c.worked.size()));
+        settle_specialists(c);
     }
     const Civ &civ = civs[c.owner];
     for (int pass = 0; pass < 12; ++pass) {
@@ -650,7 +661,11 @@ void Game::update_city(City &c)
             lux += sci + tax;
             sci = tax = 0;
         }
+        // Specialists, before the Marketplace, Bank, Library and University
+        // multiply them (DOS order). Under Anarchy scientists find nothing.
         lux += c.entertainers * 2;
+        tax += c.taxmen * 2;
+        if (civ.govt != Government::Anarchy) sci += c.scientists * 2;
         if (c.has(Building::Marketplace)) {
             tax = tax * 3 / 2;
             lux = lux * 3 / 2;
@@ -669,7 +684,7 @@ void Game::update_city(City &c)
         s.lux = lux;
         s.sci = sci;
         // Happiness.
-        const int workers = c.size - c.entertainers;
+        const int workers = c.size - c.specialists();
         int content = std::min(workers, content_base(difficulty));
         int unhappy = workers - content;
         int happy = 0;
@@ -760,7 +775,7 @@ void Game::update_city(City &c)
             return ya.food * 3 + ya.shields * 2 + ya.trade < yb.food * 3 + yb.shields * 2 + yb.trade;
         });
         c.worked.erase(worst);
-        c.entertainers = c.size - static_cast<int>(c.worked.size());
+        settle_specialists(c);
     }
 }
 
@@ -2108,14 +2123,16 @@ void Game::toggle_tile(int city_id, int dx, int dy)
     for (size_t i = 0; i < c->worked.size(); ++i) {
         if (c->worked[i].first == dx && c->worked[i].second == dy) {
             c->worked.erase(c->worked.begin() + static_cast<long>(i));
-            c->entertainers++;
-            update_city(*c);
+            update_city(*c);   // the citizen becomes an entertainer
             return;
         }
     }
     if (!tile_free_for(*c, c->x + dx, c->y + dy)) return;
-    if (c->entertainers > 0) {
-        c->entertainers--;
+    if (c->specialists() > 0) {
+        // An entertainer goes to work first, then a taxman, then a scientist.
+        if (c->entertainers > 0) c->entertainers--;
+        else if (c->taxmen > 0) c->taxmen--;
+        else c->scientists--;
     } else if (!c->worked.empty()) {
         c->worked.erase(c->worked.begin()); // move the first worker here
     } else {
@@ -2123,6 +2140,26 @@ void Game::toggle_tile(int city_id, int dx, int dy)
     }
     c->worked.push_back({dx, dy});
     update_city(*c);
+}
+
+bool Game::cycle_specialist(int city_id, int index)
+{
+    City *c = city(city_id);
+    if (!c || index < 0 || index >= c->specialists()) return false;
+    if (c->size < kSpecialistSize) return false;
+    c->manual = true;
+    if (index < c->entertainers) {
+        c->entertainers--;
+        c->taxmen++;
+    } else if (index < c->entertainers + c->taxmen) {
+        c->taxmen--;
+        c->scientists++;
+    } else {
+        c->scientists--;
+        c->entertainers++;
+    }
+    update_city(*c);
+    return true;
 }
 
 // ---------------------------------------------------------------- turn

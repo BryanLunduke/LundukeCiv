@@ -76,7 +76,13 @@ struct City {
     int build = static_cast<int>(UnitType::Militia);
     std::uint32_t buildings = 0;
     std::vector<std::pair<int, int>> worked; // offsets from the centre
+    // Specialists: citizens not working the land. As in the DOS game each
+    // makes 2 of something: an entertainer luxuries, a taxman gold, a
+    // scientist bulbs. Taxmen and scientists need a city of size 5 or more.
     int entertainers = 0;
+    int taxmen = 0;
+    int scientists = 0;
+    int specialists() const { return entertainers + taxmen + scientists; }
     bool manual = false;    // the player placed workers by hand
     int founded = 1;
     bool bought = false;
@@ -270,6 +276,9 @@ public:
     bool tile_free_for(const City &c, int x, int y) const;
     void update_city(City &c);            // recompute stats (and arrange workers unless manual)
     void arrange_workers(City &c);
+    // Everyone not on a worked square is a specialist: keep the taxmen and
+    // scientists that still fit (none below size 5), the rest entertain.
+    void settle_specialists(City &c) const;
     // Computer rulers get Civ-style handicaps: cheaper growth and builds on
     // harder levels, dearer on Chieftain (percent, 100 for humans).
     int ai_cost_percent(int civ) const;
@@ -309,6 +318,12 @@ public:
     bool buy(int city_id);
     void set_production(int city_id, bool unit, int what);
     void toggle_tile(int city_id, int dx, int dy);
+    // Clicking specialist `index` (entertainers first, then taxmen, then
+    // scientists) turns an entertainer into a taxman, a taxman into a
+    // scientist and a scientist back into an entertainer. False, and no
+    // change, in a city smaller than kSpecialistSize.
+    static constexpr int kSpecialistSize = 5;
+    bool cycle_specialist(int city_id, int index);
 
     // --- diplomats and caravans
     bool diplomat_can(int unit_id, int tx, int ty, DiploAction a) const;

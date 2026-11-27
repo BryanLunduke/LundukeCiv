@@ -30,10 +30,20 @@ const std::vector<std::string> &citizen_rows(int kind)
     static const std::vector<std::string> entertainer = {
         "K.KKK.K", "KpKKKpK", "KsKsKsK", "KsssssK", "KsKKKsK", ".KsssK.", "KpppppK", "KpPpPpK", "KpppppK", "KKK.KKK",
     };
+    // Taxman: a tall brown hat and a green coat with a gold coin.
+    static const std::vector<std::string> taxman = {
+        ".KBBBK.", "KBBBBBK", "KsKsKsK", "KsssssK", "KsKKKsK", ".KsssK.", "KEEyEEK", "KEyYyEK", "KEEyEEK", "KKK.KKK",
+    };
+    // Scientist: grey hair, spectacles and a white coat with a blue flask.
+    static const std::vector<std::string> scientist = {
+        ".KKKKK.", "KgggggK", "KcKgKcK", "KsssssK", "KsKKKsK", ".KsssK.", "KwwuwwK", "KwWUWwK", "KwwwwwK", "KKK.KKK",
+    };
     switch (kind) {
     case 0: return happy;
     case 1: return content;
     case 2: return unhappy;
+    case 4: return taxman;
+    case 5: return scientist;
     default: return entertainer;
     }
 }
@@ -310,22 +320,57 @@ void App::draw_city(cairo_t *cr, Dialog &d)
         auto face = [&](int kind, int n) {
             for (int i = 0; i < n; ++i) {
                 paint_pixmap(cr, art::sprite(citizen_rows(kind)), px, py, 3);
-                px += n > 12 ? 18 : 24;
+                px += c.size > 12 ? 18 : 24;
             }
         };
-        const int workers = c.size - c.entertainers;
+        const int workers = c.size - c.specialists();
         const int happy = std::min(s.happy, workers), unhappy = std::min(s.unhappy, workers - happy);
         face(0, happy);
         face(1, std::max(0, workers - happy - unhappy));
         face(2, unhappy);
         px += 8;
-        face(3, c.entertainers);
+        // Specialists: click one to make an entertainer a taxman, a taxman
+        // a scientist and a scientist an entertainer again (size 5 and up).
+        const int cid = c.id;
+        const int kinds[3] = {3, 4, 5};
+        const int counts[3] = {c.entertainers, c.taxmen, c.scientists};
+        int index = 0;
+        for (int k = 0; k < 3; ++k) {
+            for (int i = 0; i < counts[k]; ++i, ++index) {
+                const double sx = px;
+                face(kinds[k], 1);
+                if (!ro) {
+                    const double hw = px - sx;
+                    if (hover(sx - 2, py - 2, hw, 34)) {
+                        round_rect(cr, sx - 2, py - 2, hw, 34, 3);
+                        set(cr, kSlateGold);
+                        cairo_set_line_width(cr, 2);
+                        cairo_stroke(cr);
+                    }
+                    hot(sx - 2, py - 2, hw, 34, [this, cid, index] {
+                        if (!g().cycle_specialist(cid, index))
+                            message("Specialists", {"A city must have five population units to support taxmen or scientists."});
+                    });
+                }
+            }
+        }
         cy += 54;
         std::string mood = std::to_string(s.happy) + " happy \u00b7 " + std::to_string(s.content) + " content \u00b7 " +
                            std::to_string(s.unhappy) + " unhappy";
-        if (c.entertainers) mood += " \u00b7 " + std::to_string(c.entertainers) + " entertain";
         text(cr, kUiFont, mood, L, cy, kSlateDim);
         cy += 20;
+        if (c.specialists()) {
+            std::string sp;
+            auto add = [&](int n, const char *one, const char *many, const char *what) {
+                if (!n) return;
+                sp += (sp.empty() ? "" : " \u00b7 ") + std::to_string(n) + " " + (n == 1 ? one : many) + " +" + std::to_string(2 * n) + " " + what;
+            };
+            add(c.entertainers, "entertainer", "entertainers", "lux");
+            add(c.taxmen, "taxman", "taxmen", "gold");
+            add(c.scientists, "scientist", "scientists", "sci");
+            text(cr, kUiFont, sp, L, cy, kSlateInk, 1.0, static_cast<int>(lw));
+            cy += 20;
+        }
         if (s.disorder) {
             text(cr, kBoldFont, "CIVIL DISORDER: no production or taxes!", L, cy, kSlateBad);
             cy += 20;
