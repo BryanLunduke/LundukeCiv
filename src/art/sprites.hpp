@@ -54,6 +54,10 @@ Pixmap city_tile(int size, bool walls, bool capital, const CivColors &civ, int s
 void tiny_text(Pixmap &pm, int x, int y, const std::string &text, Argb ink);
 int tiny_width(const std::string &text);
 
+// A leader's portrait for an audience (leaders.cpp): tribe 0..13, or -1
+// for a people of the player's own making; mood -1 scowls, 0, 1 smiles.
+Pixmap leader_portrait(int tribe, const CivColors &civ, int mood);
+
 // A Wonder of the World as a framed 32x32 plaque (wonders.cpp).
 Pixmap wonder_icon(int wonder);
 

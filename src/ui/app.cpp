@@ -7,6 +7,8 @@
 
 #include "app.hpp"
 
+#include "databank.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -21,7 +23,7 @@ using namespace civ;
 
 namespace {
 
-const char *kMenuTitles[] = {"Game", "Orders", "Advisors", "World", "Civilopedia"};
+const char *kMenuTitles[] = {"Game", "Orders", "Advisors", "World", "Databank"};
 constexpr int kMenuCount = 5;
 
 char status_letter(const Unit &u)
@@ -255,6 +257,7 @@ void App::end_turn()
     refresh_terrain();
     collect_news(true);
     begin_turn();
+    open_talks();
     // Raiders at the gates: show where they are rather than the next unit.
     for (size_t i = first; i < g().messages.size(); ++i) {
         const Message &m = g().messages[i];
@@ -297,6 +300,56 @@ void App::collect_news(bool report)
         d.lines = {w.second};
         open(d);
     }
+}
+
+void App::open_talks()
+{
+    // The oldest audience goes on top; each dialog answers talks.front().
+    for (size_t i = g().talks.size(); i-- > 0;) {
+        Dialog d;
+        d.kind = DialogKind::Talk;
+        d.other = g().talks[i].from;
+        open(d);
+    }
+}
+
+void App::answer_talk(bool accept)
+{
+    if (!dialogs_.empty() && dialogs_.back().kind == DialogKind::Talk) dialogs_.pop_back();
+    const std::string what = g().answer_talk(accept);
+    if (!what.empty()) news_ = what;
+    // What it led to (war, gold, an advance) shows once the audiences are over.
+    bool more = false;
+    for (const Dialog &d : dialogs_) more |= d.kind == DialogKind::Talk;
+    if (!more) collect_news(false);
+    refresh_terrain();
+}
+
+void App::audience(int civ, Proposal p)
+{
+    bool yes = false;
+    const std::string reply = g().propose(human(), civ, p, &yes);
+    if (!dialogs_.empty() && dialogs_.back().kind == DialogKind::Audience) {
+        dialogs_.back().lines = {reply};
+        dialogs_.back().view_only = yes;   // remembers the answer for the face
+    }
+    seen_messages_ = g().messages.size();   // the reply says it all
+}
+
+void App::open_databank(int topic, const std::string &select)
+{
+    Dialog d;
+    d.kind = DialogKind::Databank;
+    d.title = "Databank";
+    d.other = std::clamp(topic, 0, static_cast<int>(DatabankTopic::Count) - 1);
+    d.scroll = 0;
+    if (!select.empty()) {
+        const std::vector<DatabankEntry> e = databank(static_cast<DatabankTopic>(d.other));
+        for (size_t i = 0; i < e.size(); ++i) {
+            if (e[i].name == select) d.scroll = static_cast<int>(i);
+        }
+    }
+    open(d);
 }
 
 void App::message(const std::string &title, const std::vector<std::string> &lines)
@@ -388,6 +441,36 @@ void App::try_move(int dx, int dy)
         return;
     }
     case MoveResult::Zoc: news_ = "Can't move there: an enemy unit's zone of control."; return;
+    case MoveResult::FighterOnly: news_ = "Only Fighters can attack aircraft in flight."; return;
+    case MoveResult::Senate: {
+        const int o = g().owner_at(tx, ty);
+        const std::string who = o >= 0 ? g().civs[o].name : std::string("them");
+        Dialog d;
+        d.kind = DialogKind::Message;
+        d.title = "The Senate";
+        d.lines = {"The Senate will not allow an attack on the " + who + " while our " +
+                       std::string(g().treaty(human(), o) == Treaty::Peace ? "peace treaty" : "cease-fire") + " stands.",
+                   "Under a " + std::string(government_info(g().civs[human()].govt).name) +
+                       " we may not break our word. A revolution to another government would silence the Senate."};
+        open(d);
+        return;
+    }
+    case MoveResult::Nuked: {
+        Dialog d;
+        d.kind = DialogKind::Nuke;
+        d.title = "Nuclear Attack";
+        d.tx = tx;
+        d.ty = ty;
+        for (size_t i = seen_messages_; i < g().messages.size(); ++i) {
+            const Message &m = g().messages[i];
+            if (m.civ == human() || m.civ == -1) d.lines.push_back(m.text);
+        }
+        seen_messages_ = g().messages.size();
+        refresh_terrain();
+        open(d);
+        unit_moved();
+        return;
+    }
     case MoveResult::Blocked:
         if (ty >= 0 && ty < g().map.h && g().map.ocean(tx, ty)) news_ = "Your " + std::string(unit_info(u->type).name) + " can't go to sea.";
         return;
@@ -485,6 +568,35 @@ void App::do_order(char order)
         news_ = "Your " + n + " is disbanded.";
         active_ = -1;
         select_next(false);
+        return;
+    }
+    case 'X':   // pillage
+        if (!g().pillage(active_)) {
+            news_ = "Nothing here to pillage.";
+            return;
+        }
+        unit_moved();
+        return;
+    case 'H':   // home city
+        if (!g().set_home_city(active_)) {
+            news_ = "Home City: the unit must stand in one of our cities other than its home.";
+            return;
+        }
+        collect_news(false);
+        return;
+    case 'u': {
+        const int n = g().unload(active_);
+        if (!n) {
+            news_ = "Nothing aboard to unload.";
+            return;
+        }
+        news_ = std::to_string(n) + (n == 1 ? " unit is" : " units are") + " ready to go ashore.";
+        for (const Unit &c : g().units) {
+            if (c.carried_by == active_) {
+                active_ = c.id;
+                break;
+            }
+        }
         return;
     }
     case 'g':
@@ -691,6 +803,11 @@ bool App::key(const KeyEvent &k)
             } else if (k.key == Key::Enter) {
                 GameSettings s = settings;
                 s.seed = seed_text_.empty() ? 1 : std::strtoull(seed_text_.c_str(), nullptr, 10);
+                s.earth = world_choice_ == 1;
+                if (world_choice_ != 2) {
+                    s.land_pct = 32;
+                    s.temperature = s.climate = s.age = 1;
+                }
                 if (s.player_name.empty()) s.player_name = "Lundukians";
                 if (s.player_leader.empty()) s.player_leader = "Bryan";
                 start_game(s);
@@ -716,6 +833,43 @@ bool App::key(const KeyEvent &k)
             } else if (k.key == Key::Escape) {
                 close_top();
             }
+            return true;
+        }
+        if (d.kind == DialogKind::Talk) {
+            const bool choice = !g().talks.empty() && talk_has_choice(g().talks.front());
+            if (k.key == Key::Enter || (k.key == Key::Char && k.ch == 'y') || (!choice && (k.key == Key::Escape || k.key == Key::Space)))
+                answer_talk(true);
+            else if (choice && (k.key == Key::Escape || (k.key == Key::Char && k.ch == 'n')))
+                answer_talk(false);
+            return true;
+        }
+        if (d.kind == DialogKind::ConfirmSell && k.key == Key::Enter) {
+            const Dialog copy = d;
+            dialogs_.pop_back();
+            g().sell_building(copy.city_id, copy.other);
+            collect_news(false);
+            return true;
+        }
+        if (d.kind == DialogKind::Audience && k.key == Key::Char && k.ch >= '1' && k.ch <= '4') {
+            audience(d.other, static_cast<Proposal>(k.ch - '1'));
+            return true;
+        }
+        if (d.kind == DialogKind::Databank) {
+            const int n = static_cast<int>(databank(static_cast<DatabankTopic>(d.other)).size());
+            if (k.key == Key::Up) d.scroll = (d.scroll + n - 1) % n;
+            if (k.key == Key::Down) d.scroll = (d.scroll + 1) % n;
+            if (k.key == Key::Left || k.key == Key::Right || k.key == Key::Tab) {
+                const int t = static_cast<int>(DatabankTopic::Count);
+                d.other = (d.other + (k.key == Key::Left ? t - 1 : 1)) % t;
+                d.scroll = 0;
+                d.dx = 0;
+            }
+            if (k.key == Key::Escape || k.key == Key::Enter) close_top();
+            return true;
+        }
+        if (d.kind == DialogKind::CustomWorld && k.key == Key::Enter) {
+            world_choice_ = 2;
+            close_top();
             return true;
         }
         if (k.key == Key::Escape || k.key == Key::Enter || (k.key == Key::Space && d.kind != DialogKind::City)) {
@@ -816,6 +970,18 @@ bool App::key(const KeyEvent &k)
     }
     if (k.shift && k.ch == 'd') {
         do_order('d');
+        return true;
+    }
+    if (k.shift && k.ch == 'p') {
+        do_order('X');
+        return true;
+    }
+    if (k.shift && k.ch == 'h') {
+        do_order('H');
+        return true;
+    }
+    if (k.ch == 'u') {
+        do_order('u');
         return true;
     }
     switch (k.ch) {
@@ -1002,6 +1168,10 @@ std::vector<App::MenuItem> App::menu_items(int menu)
         items.push_back({"Go To...", "G", [this] { do_order('g'); }, u != nullptr});
         items.push_back({"Wait", "W", [this] { do_order('w'); }, u != nullptr});
         items.push_back({"Skip Turn", "Space", [this] { do_order(' '); }, u != nullptr});
+        items.push_back({"Pillage", "Shift+P", [this] { do_order('X'); }, u && g().can_pillage(*u)});
+        items.push_back({"Home City", "Shift+H", [this] { do_order('H'); },
+                         u && g().city_at(u->x, u->y) && g().city_at(u->x, u->y)->owner == u->owner && g().city_at(u->x, u->y)->id != u->home});
+        items.push_back({"Unload", "U", [this] { do_order('u'); }, u && unit_info(u->type).capacity > 0 && g().cargo_count(u->id) > 0});
         items.push_back({"Disband", "Shift+D", [this] { do_order('d'); }, u != nullptr});
         items.push_back({"End Turn", "Enter", [this] { end_turn(); }, have});
         break;
@@ -1019,7 +1189,9 @@ std::vector<App::MenuItem> App::menu_items(int menu)
         items.push_back({"Center on Capital", "H", [this] { if (City *c = g().capital(human())) center_on(c->x, c->y); }, have});
         break;
     default:
-        items.push_back({"Units", "", dialog(DialogKind::UnitSheet, "Civilopedia: Units")});
+        for (int t = 0; t < static_cast<int>(DatabankTopic::Count); ++t)
+            items.push_back({databank_topic_name(static_cast<DatabankTopic>(t)), "", [this, t] { open_databank(t); }});
+        items.push_back({"Unit Chart", "", dialog(DialogKind::UnitSheet, "Databank: Unit Chart")});
         break;
     }
     return items;
