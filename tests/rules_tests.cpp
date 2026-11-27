@@ -1084,7 +1084,7 @@ static void test_corruption()
 // Research cost as in DOS Civilization 475.05: an advance is found when
 // bulbs / m > known x ratio (m = 1 BC, 2 AD), ratio = 2 x level + 6 for a
 // human (at least 11 - known), 14 - level for a computer, plus the catch-up
-// step. Hand-worked examples.
+// step, and never fewer than 10 bulbs. Hand-worked examples.
 static void test_research_cost()
 {
     Game g = flat_game();
@@ -1107,6 +1107,13 @@ static void test_research_cost()
     know(1, 5);
     CHECK_EQ(g.research_ratio(1), 12);
     CHECK_EQ(g.research_cost(1), 61);
+    // No advances yet: the DOS formula says 0 x ratio + 1 = 1 bulb, but no
+    // advance costs fewer than 10 (the FAQ's "at least 10"), human or computer.
+    know(0, 0);
+    CHECK_EQ(g.research_cost(0), 10);
+    know(1, 0);
+    CHECK_EQ(g.research_cost(1), 10);
+    CHECK_EQ(Game::kMinResearchCost, 10);
     // King, human, 1 known: ratio 12 (11 - 1 = 10 is less): 13.
     g.difficulty = Difficulty::King;
     know(0, 1);

@@ -458,10 +458,13 @@ int Game::research_ratio(int civ) const
     return ratio;
 }
 
+// The DOS formula gives 1 bulb for a civilization's very first advance; this
+// game follows the FAQ's "at least 10" instead and never charges less than
+// kMinResearchCost bulbs for any advance.
 int Game::research_cost(int civ) const
 {
     const int m = year_for_turn(turn) < 0 ? 1 : 2;
-    return m * (techs_known(civ) * research_ratio(civ) + 1);
+    return std::max(kMinResearchCost, m * (techs_known(civ) * research_ratio(civ) + 1));
 }
 
 void Game::check_research(int ci)

@@ -271,9 +271,11 @@ public:
     //           for a human at least 11 - advances known;
     //   an advance is found when bulbs / m > advances known x ratio, with
     //   m = 1 before 1 AD and 2 after; the bulbs then start again from 0.
-    // research_cost is the bulbs that takes: m x (known x ratio + 1).
+    // research_cost is the bulbs that takes: m x (known x ratio + 1), but
+    // never fewer than kMinResearchCost (the FAQ's "at least 10").
     int research_ratio(int civ) const;
     int research_cost(int civ) const;
+    static constexpr int kMinResearchCost = 10;   // no advance costs fewer bulbs
     void learn(int civ, Advance a);
     bool can_build(const City &c, bool unit, int what) const;
     bool unit_available(int civ, UnitType u) const;

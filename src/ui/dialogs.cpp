@@ -782,6 +782,8 @@ void App::draw_science(cairo_t *cr, Dialog &d)
         if (ad) f += " \u00d7 2 in AD";
         f += " \u00b7 " + std::to_string(ratio) + " a step on " + difficulty_name(g().difficulty);
         if (g().tech_catchup) f += ", " + std::to_string(g().tech_catchup) + " of it catch-up";
+        if ((ad ? 2 : 1) * (known * ratio + 1) < Game::kMinResearchCost)
+            f += " \u00b7 at least " + std::to_string(Game::kMinResearchCost);
         text(cr, kUiFont, f, L, cy, kSlateDim);
         cy += 24;
     }
