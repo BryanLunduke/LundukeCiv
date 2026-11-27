@@ -360,15 +360,16 @@ void App::draw_city(cairo_t *cr, Dialog &d)
         text(cr, kUiFont, mood, L, cy, kSlateDim);
         cy += 20;
         if (c.specialists()) {
+            // What the specialists make: 2 each, before any multipliers.
             std::string sp;
-            auto add = [&](int n, const char *one, const char *many, const char *what) {
-                if (!n) return;
-                sp += (sp.empty() ? "" : " \u00b7 ") + std::to_string(n) + " " + (n == 1 ? one : many) + " +" + std::to_string(2 * n) + " " + what;
+            auto add = [&](int n, const char *what) {
+                if (n) sp += (sp.empty() ? "+" : " \u00b7 +") + std::to_string(2 * n) + " " + what;
             };
-            add(c.entertainers, "entertainer", "entertainers", "lux");
-            add(c.taxmen, "taxman", "taxmen", "gold");
-            add(c.scientists, "scientist", "scientists", "sci");
-            text(cr, kUiFont, sp, L, cy, kSlateInk, 1.0, static_cast<int>(lw));
+            add(c.entertainers, "lux");
+            add(c.taxmen, "gold");
+            add(c.scientists, "sci");
+            const int n = c.specialists();
+            text(cr, kUiFont, sp + " from " + std::to_string(n) + (n == 1 ? " specialist" : " specialists"), L, cy, kSlateInk);
             cy += 20;
         }
         if (s.disorder) {
@@ -403,11 +404,11 @@ void App::draw_city(cairo_t *cr, Dialog &d)
             const Government gv = g().civs[c.owner].govt;
             std::string why;
             if (gv == Government::Democracy) why = "Democracy: no corruption";
-            else if (gv == Government::Communism) why = "Communism: as if 10 squares from the Palace";
+            else if (gv == Government::Communism) why = "Palace 10 sq (Communism)";
             else if (c.has(Building::Palace)) why = "The Palace is here: no corruption";
-            else if (s.palace_distance >= kNoPalaceDistance) why = "Corruption as if 32 squares away (no Palace near)";
-            else why = std::to_string(s.palace_distance) + " squares from the Palace";
-            if (c.has(Building::Courthouse) && gv != Government::Democracy) why += " \u00b7 Courthouse halves it";
+            else if (s.palace_distance >= kNoPalaceDistance) why = "32+ sq from the Palace";
+            else why = std::to_string(s.palace_distance) + " sq from the Palace";
+            if (c.has(Building::Courthouse) && gv != Government::Democracy) why += " \u00b7 Courthouse \u00f72";
             text(cr, kUiFont, why, L, cy, kSlateDim);
             cy += 20;
         }
@@ -777,12 +778,10 @@ void App::draw_science(cairo_t *cr, Dialog &d)
         // The DOS formula, spelled out: known x bulbs per advance, x2 in AD.
         const bool ad = year_for_turn(g().turn) > 0;
         const int known = g().techs_known(me), ratio = g().research_ratio(me);
-        std::string f = std::to_string(known) + " known \u00d7 " + std::to_string(ratio) + " per advance (" +
-                        difficulty_name(g().difficulty);
-        if (g().tech_catchup) f += ", +" + std::to_string(g().tech_catchup) + " to catch up";
-        f += ")";
-        if (ad) f += " \u00d7 2 since 1 AD";
-        f += ", and one bulb more" + std::string(ad ? " (two in AD)." : ".");
+        std::string f = "(" + std::to_string(known) + " known \u00d7 " + std::to_string(ratio) + " + 1)";
+        if (ad) f += " \u00d7 2 in AD";
+        f += " \u00b7 " + std::to_string(ratio) + " a step on " + difficulty_name(g().difficulty);
+        if (g().tech_catchup) f += ", " + std::to_string(g().tech_catchup) + " of it catch-up";
         text(cr, kUiFont, f, L, cy, kSlateDim);
         cy += 24;
     }
