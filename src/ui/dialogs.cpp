@@ -30,10 +30,20 @@ const std::vector<std::string> &citizen_rows(int kind)
     static const std::vector<std::string> entertainer = {
         "K.KKK.K", "KpKKKpK", "KsKsKsK", "KsssssK", "KsKKKsK", ".KsssK.", "KpppppK", "KpPpPpK", "KpppppK", "KKK.KKK",
     };
+    // Taxman: a tall brown hat and a green coat with a gold coin.
+    static const std::vector<std::string> taxman = {
+        ".KBBBK.", "KBBBBBK", "KsKsKsK", "KsssssK", "KsKKKsK", ".KsssK.", "KEEyEEK", "KEyYyEK", "KEEyEEK", "KKK.KKK",
+    };
+    // Scientist: grey hair, spectacles and a white coat with a blue flask.
+    static const std::vector<std::string> scientist = {
+        ".KKKKK.", "KgggggK", "KcKgKcK", "KsssssK", "KsKKKsK", ".KsssK.", "KwwuwwK", "KwWUWwK", "KwwwwwK", "KKK.KKK",
+    };
     switch (kind) {
     case 0: return happy;
     case 1: return content;
     case 2: return unhappy;
+    case 4: return taxman;
+    case 5: return scientist;
     default: return entertainer;
     }
 }
@@ -310,22 +320,58 @@ void App::draw_city(cairo_t *cr, Dialog &d)
         auto face = [&](int kind, int n) {
             for (int i = 0; i < n; ++i) {
                 paint_pixmap(cr, art::sprite(citizen_rows(kind)), px, py, 3);
-                px += n > 12 ? 18 : 24;
+                px += c.size > 12 ? 18 : 24;
             }
         };
-        const int workers = c.size - c.entertainers;
+        const int workers = c.size - c.specialists();
         const int happy = std::min(s.happy, workers), unhappy = std::min(s.unhappy, workers - happy);
         face(0, happy);
         face(1, std::max(0, workers - happy - unhappy));
         face(2, unhappy);
         px += 8;
-        face(3, c.entertainers);
+        // Specialists: click one to make an entertainer a taxman, a taxman
+        // a scientist and a scientist an entertainer again (size 5 and up).
+        const int cid = c.id;
+        const int kinds[3] = {3, 4, 5};
+        const int counts[3] = {c.entertainers, c.taxmen, c.scientists};
+        int index = 0;
+        for (int k = 0; k < 3; ++k) {
+            for (int i = 0; i < counts[k]; ++i, ++index) {
+                const double sx = px;
+                face(kinds[k], 1);
+                if (!ro) {
+                    const double hw = px - sx;
+                    if (hover(sx - 2, py - 2, hw, 34)) {
+                        round_rect(cr, sx - 2, py - 2, hw, 34, 3);
+                        set(cr, kSlateGold);
+                        cairo_set_line_width(cr, 2);
+                        cairo_stroke(cr);
+                    }
+                    hot(sx - 2, py - 2, hw, 34, [this, cid, index] {
+                        if (!g().cycle_specialist(cid, index))
+                            message("Specialists", {"A city must have five population units to support taxmen or scientists."});
+                    });
+                }
+            }
+        }
         cy += 54;
         std::string mood = std::to_string(s.happy) + " happy \u00b7 " + std::to_string(s.content) + " content \u00b7 " +
                            std::to_string(s.unhappy) + " unhappy";
-        if (c.entertainers) mood += " \u00b7 " + std::to_string(c.entertainers) + " entertain";
         text(cr, kUiFont, mood, L, cy, kSlateDim);
         cy += 20;
+        if (c.specialists()) {
+            // What the specialists make: 2 each, before any multipliers.
+            std::string sp;
+            auto add = [&](int n, const char *what) {
+                if (n) sp += (sp.empty() ? "+" : " \u00b7 +") + std::to_string(2 * n) + " " + what;
+            };
+            add(c.entertainers, "lux");
+            add(c.taxmen, "gold");
+            add(c.scientists, "sci");
+            const int n = c.specialists();
+            text(cr, kUiFont, sp + " from " + std::to_string(n) + (n == 1 ? " specialist" : " specialists"), L, cy, kSlateInk);
+            cy += 20;
+        }
         if (s.disorder) {
             text(cr, kBoldFont, "CIVIL DISORDER: no production or taxes!", L, cy, kSlateBad);
             cy += 20;
@@ -353,6 +399,19 @@ void App::draw_city(cairo_t *cr, Dialog &d)
         text(cr, kUiFont, "Tax " + std::to_string(s.tax) + "  \u00b7  Lux " + std::to_string(s.lux) + "  \u00b7  Sci " +
                               std::to_string(s.sci), L, cy, kSlateInk);
         cy += 20;
+        {
+            // Where the corruption comes from (the DOS formula: trade x distance x 3 / government).
+            const Government gv = g().civs[c.owner].govt;
+            std::string why;
+            if (gv == Government::Democracy) why = "Democracy: no corruption";
+            else if (gv == Government::Communism) why = "Palace 10 sq (Communism)";
+            else if (c.has(Building::Palace)) why = "The Palace is here: no corruption";
+            else if (s.palace_distance >= kNoPalaceDistance) why = "32+ sq from the Palace";
+            else why = std::to_string(s.palace_distance) + " sq from the Palace";
+            if (c.has(Building::Courthouse) && gv != Government::Democracy) why += " \u00b7 Courthouse \u00f72";
+            text(cr, kUiFont, why, L, cy, kSlateDim);
+            cy += 20;
+        }
         text(cr, kUiFont, "Upkeep: " + std::to_string(s.shield_upkeep) + " shields, " + std::to_string(s.food_upkeep) + " food",
              L, cy, kSlateDim);
         cy += 20;
@@ -712,9 +771,22 @@ void App::draw_science(cairo_t *cr, Dialog &d)
     double cy = dialog_frame(cr, x, y, w, h, d.title);
     const double L = x + 24, R = x + w - 24;
     text(cr, kUiFont, "The " + c.name + " know " + std::to_string(g().techs_known(me)) + " of " + std::to_string(kAdvanceCount) +
-                          " advances. Each new advance costs " + std::to_string(g().research_cost(me)) + " bulbs.",
+                          " advances. The next one costs " + std::to_string(g().research_cost(me)) + " bulbs.",
          L, cy, kSlateDim);
-    cy += 24;
+    cy += 22;
+    {
+        // The DOS formula, spelled out: known x bulbs per advance, x2 in AD.
+        const bool ad = year_for_turn(g().turn) > 0;
+        const int known = g().techs_known(me), ratio = g().research_ratio(me);
+        std::string f = "(" + std::to_string(known) + " known \u00d7 " + std::to_string(ratio) + " + 1)";
+        if (ad) f += " \u00d7 2 in AD";
+        f += " \u00b7 " + std::to_string(ratio) + " a step on " + difficulty_name(g().difficulty);
+        if (g().tech_catchup) f += ", " + std::to_string(g().tech_catchup) + " of it catch-up";
+        if ((ad ? 2 : 1) * (known * ratio + 1) < Game::kMinResearchCost)
+            f += " \u00b7 at least " + std::to_string(Game::kMinResearchCost);
+        text(cr, kUiFont, f, L, cy, kSlateDim);
+        cy += 24;
+    }
     if (c.research != Advance::None) {
         text(cr, kBoldFont, std::string("Researching ") + advance_info(c.research).name, L, cy, kSlateGold);
         const int t = research_turns(me);
@@ -935,9 +1007,9 @@ void App::draw_cities(cairo_t *cr, Dialog &d)
     const double x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
     double cy = dialog_frame(cr, x, y, w, h, d.title);
     const double L = x + 24, R = x + w - 24;
-    const double cols[] = {L, L + 200, L + 260, L + 330, L + 400, L + 470};
-    const char *heads[] = {"CITY", "SIZE", "FOOD", "SHIELDS", "TRADE", "PRODUCING"};
-    for (int i = 0; i < 6; ++i) text(cr, kTagFont, heads[i], cols[i], cy, kSlateDim);
+    const double cols[] = {L, L + 190, L + 240, L + 300, L + 370, L + 430, L + 540};
+    const char *heads[] = {"CITY", "SIZE", "FOOD", "SHIELDS", "TRADE", "CORRUPT", "PRODUCING"};
+    for (int i = 0; i < 7; ++i) text(cr, kTagFont, heads[i], cols[i], cy, kSlateDim);
     cy += 18;
     for (const City *c : list) {
         if (cy + 30 > y + h - 64) break;
@@ -954,8 +1026,13 @@ void App::draw_cities(cairo_t *cr, Dialog &d)
              s.food_surplus < 0 ? kSlateBad : kSlateInk);
         text(cr, kUiFont, std::to_string(s.shield_surplus), cols[3], cy + 4, kSlateInk);
         text(cr, kUiFont, std::to_string(s.raw.trade), cols[4], cy + 4, kSlateInk);
+        // Corruption, with the distance it is worked out from.
+        text(cr, kUiFont, std::to_string(s.corruption) + "  \u00b7 " + (c->has(Building::Palace) && g().civs[me].govt != Government::Communism
+                                                                          ? std::string("Palace")
+                                                                          : std::to_string(s.palace_distance) + " sq"),
+             cols[5], cy + 4, s.corruption ? kSlateInk : kSlateDim);
         const std::string prod = c->build_unit ? unit_info(c->build).name : building_info(c->build).name;
-        text(cr, kUiFont, prod + "  (" + std::to_string(c->shields) + "/" + std::to_string(g().production_cost(*c)) + ")", cols[5], cy + 4,
+        text(cr, kUiFont, prod + "  (" + std::to_string(c->shields) + "/" + std::to_string(g().production_cost(*c)) + ")", cols[6], cy + 4,
              kSlateDim);
         const int id = c->id;
         hot(L - 6, cy, R - L + 12, 28, [this, id] { open_city(id); });
@@ -1120,7 +1197,7 @@ void App::draw_help(cairo_t *cr, Dialog &d)
     const std::pair<const char *, const char *> rows[] = {
         {"Arrows, keypad", "Move the active unit (7 9 1 3 diagonals)"},
         {"B", "Found a city (or join one)"},
-        {"R  I  M  P", "Road/railroad, irrigate, mine, fortress/clean"},
+        {"R  I  M  P", "Road/railroad, irrigate, mine, fortress"},
         {"F  S", "Fortify, sentry"},
         {"G", "Go to a square (then click it)"},
         {"W  Space  N", "Wait, skip this turn, next unit"},

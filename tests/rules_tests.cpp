@@ -172,7 +172,7 @@ static void test_tech_prereqs()
         }
     }
     CHECK_EQ(static_cast<long long>(known.size()), kAdvanceCount);
-    CHECK_EQ(kAdvanceCount, 68);
+    CHECK_EQ(kAdvanceCount, 67);   // the DOS 68 without Recycling
     CHECK(advance_info(Advance::Monarchy).req1 == Advance::CeremonialBurial || advance_info(Advance::Monarchy).req2 == Advance::CeremonialBurial);
     CHECK(advance_info(Advance::Writing).req1 == Advance::Alphabet);
     Game g = flat_game();
@@ -642,7 +642,7 @@ static void test_wonders()
     }
     // Milestone 1 saves (version 1) still load.
     std::string old = save_game(k);
-    old.replace(0, std::strlen("LUNDUKECIV 2"), "LUNDUKECIV 1");
+    old.replace(0, std::strlen("LUNDUKECIV 3"), "LUNDUKECIV 1");
     Game m;
     CHECK(load_game(old, m));
 }
@@ -752,7 +752,7 @@ static void test_envoys()
     CHECK_EQ(h.city(east)->shields, sh + 50);
 }
 
-static void test_rail_pollution()
+static void test_railroads()
 {
     // Railroads: free movement between railroad squares, +50% shields.
     Game g = flat_game();
@@ -776,36 +776,534 @@ static void test_rail_pollution()
     g.learn(0, Advance::Railroad);
     CHECK(g.can_work(*g.unit(s), Order::Railroad));
 
-    // Pollution halves a square's output until settlers clean it up.
-    Game p = flat_game();
-    CHECK_EQ(p.tile_yield(20, 20, 0, false).food, 2);
-    p.map.at(20, 20).pollution = true;
-    CHECK_EQ(p.tile_yield(20, 20, 0, false).food, 1);
-    CHECK_EQ(p.polluted_squares(), 1);
-    const int c = place(p, 0, UnitType::Settlers, 20, 20);
-    CHECK(p.can_work(*p.unit(c), Order::Clean));
-    CHECK(p.start_work(c, Order::Clean));
-    for (int t = 0; t < 6 && p.map.at(20, 20).pollution; ++t) p.end_turn();
-    CHECK(!p.map.at(20, 20).pollution);
-
-    // Global warming once enough pollution has built up.
-    Game w = flat_game();
-    for (int x = 20; x < 30; ++x) w.map.at(x, 20).pollution = true;
-    w.warming = Game::kWarmingThreshold - 1;
-    CHECK(w.warming_risk() >= 99);
-    w.end_turn();
-    CHECK_EQ(w.warming_events, 1);
-    CHECK_EQ(w.warming, 0);
-    bool said = false;
-    for (const Message &msg : w.messages) said |= msg.text.find("Global warming") != std::string::npos;
-    CHECK(said);
     // Saved and loaded.
-    w.map.at(40, 40).railroad = w.map.at(40, 40).road = true;
+    g.map.at(40, 40).railroad = g.map.at(40, 40).road = true;
     Game back;
-    CHECK(load_game(save_game(w), back));
-    CHECK_EQ(back.warming_events, 1);
+    CHECK(load_game(save_game(g), back));
     CHECK(back.map.at(40, 40).railroad);
-    CHECK(back.map.at(20, 20).pollution);
+}
+
+// Pollution and global warming are not in this game: a big industrial city
+// never dirties the land or changes the climate, and saves from before
+// (version 2, with polluted squares, a "climate" line, Mass Transit and
+// Recycling Centers, a clean-up order) load with all of that dropped.
+static void test_no_pollution()
+{
+    Game g = flat_game(Terrain::Hills);
+    const int s = place(g, 0, UnitType::Settlers, 20, 20);
+    CHECK(g.found_city(s, "Smokestack"));
+    City &c = g.cities.back();
+    for (Advance a : {Advance::Industrialization, Advance::Automobile, Advance::MassProduction, Advance::Plastics,
+                      Advance::Refining, Advance::Electricity, Advance::Robotics})
+        g.learn(0, a);
+    c.size = 20;
+    c.add(Building::Aqueduct);
+    c.add(Building::Factory);
+    c.add(Building::PowerPlant);
+    c.add(Building::MfgPlant);
+    for (int dy = -2; dy <= 2; ++dy)
+        for (int dx = -2; dx <= 2; ++dx) g.map.at(20 + dx, 20 + dy).mine = true;
+    g.civs[0].gold = 100000;
+    g.update_city(c);
+    // Factory +50%, Power Plant +50%, Mfg. Plant +100%: 300% of the raw shields.
+    CHECK_EQ(c.stats.shield_surplus + c.stats.shield_upkeep, c.stats.raw.shields * 300 / 100);
+    CHECK(c.stats.raw.shields >= 20);
+    std::vector<Terrain> before;
+    for (const Tile &t : g.map.tiles) before.push_back(t.terrain);
+    for (int t = 0; t < 120; ++t) {
+        g.cities.back().size = 20;
+        g.end_turn();
+    }
+    bool same = true;
+    for (size_t i = 0; i < before.size(); ++i) same &= g.map.tiles[i].terrain == before[i];
+    CHECK(same);
+    for (const Message &m : g.messages) {
+        CHECK(m.text.find("ollution") == std::string::npos);
+        CHECK(m.text.find("warming") == std::string::npos);
+    }
+    // Mass Transit and the Recycling Center are gone (and so is Recycling).
+    for (int b = 0; b < kBuildingCount; ++b) {
+        CHECK(std::strcmp(building_info(b).name, "Mass Transit") != 0);
+        CHECK(std::strcmp(building_info(b).name, "Recycling Center") != 0);
+    }
+    const std::string text = save_game(g);
+    CHECK(text.rfind("LUNDUKECIV 4\n", 0) == 0);
+    CHECK(text.find("climate|") == std::string::npos);
+
+    // A version 2 save: City Walls, Factory, Mass Transit, Mfg. Plant,
+    // Recycling Center and SDI Defense (old bits 7, 13, 17, 18, 19, 20), a
+    // city building a Recycling Center, polluted squares and a settler on
+    // a clean-up job.
+    Game v = flat_game();
+    const int vs = place(v, 0, UnitType::Settlers, 30, 30);
+    CHECK(v.found_city(vs, "Oldtown"));
+    const int cleaner = place(v, 0, UnitType::Settlers, 31, 31);
+    std::string old = save_game(v);
+    old.replace(0, std::strlen("LUNDUKECIV 4"), "LUNDUKECIV 2");
+    {
+        // City line: field 9 build_unit, 10 build, 11 buildings.
+        const size_t at = old.find("city|");
+        const size_t eol = old.find('\n', at);
+        std::string line = old.substr(at, eol - at);
+        std::vector<std::string> f;
+        size_t p0 = 0;
+        for (size_t p1; (p1 = line.find('|', p0)) != std::string::npos; p0 = p1 + 1) f.push_back(line.substr(p0, p1 - p0));
+        f.push_back(line.substr(p0));
+        f[9] = "0";
+        f[10] = "19";
+        f[11] = std::to_string(1u << 0 | 1u << 7 | 1u << 13 | 1u << 17 | 1u << 18 | 1u << 19 | 1u << 20);
+        std::string nl;
+        for (size_t i = 0; i < f.size(); ++i) nl += (i ? "|" : "") + f[i];
+        old.replace(at, eol - at, nl);
+        // The settler's order: 10 was "clean up pollution".
+        const std::string key = "unit|" + std::to_string(cleaner) + "|";
+        const size_t ua = old.find(key);
+        size_t q = ua;
+        for (int k = 0; k < 8; ++k) q = old.find('|', q) + 1;
+        old.replace(q, old.find('|', q) - q, "10");
+        // Map row 31: square 31 gets the old pollution bit (19).
+        size_t row = old.find("map|");
+        row = old.find('\n', row) + 1;
+        for (int y = 0; y < 31; ++y) row = old.find('\n', row) + 1;
+        const unsigned word = static_cast<unsigned>(std::strtoul(old.substr(row + 31 * 5, 5).c_str(), nullptr, 16)) | (1u << 19);
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%05x", word & 0xFFFFFu);
+        old.replace(row + 31 * 5, 5, buf);
+        old.replace(old.find("space|"), 0, "climate|599|3\n");
+    }
+    Game w;
+    std::string err;
+    CHECK(load_game(old, w, &err));
+    CHECK(err.empty());
+    if (!w.cities.empty()) {
+        const City &oc = w.cities.back();
+        CHECK(oc.has(Building::Palace));
+        CHECK(oc.has(Building::CityWalls));
+        CHECK(oc.has(Building::Factory));
+        CHECK(oc.has(Building::MfgPlant));
+        CHECK(oc.has(Building::SdiDefense));
+        CHECK(!oc.has(Building::Aqueduct));
+        CHECK_EQ(static_cast<long long>(oc.buildings), static_cast<long long>(1u << 0 | 1u << 7 | 1u << 13 | 1u << 17 | 1u << 18));
+        CHECK(oc.build_unit);   // the Recycling Center's shields go to a defender
+    }
+    if (const Unit *u = w.unit(cleaner)) CHECK(u->order == Order::None);
+    // Saved again, the old pollution bit is gone from the map.
+    const std::string again = save_game(w);
+    CHECK(again.find("climate|") == std::string::npos);
+    CHECK(save_game(w) == again);
+    Game x;
+    CHECK(load_game(again, x));
+    CHECK(save_game(x) == again);
+}
+
+// The Recycling advance is gone (with nothing left to build it only cost
+// bulbs): no advance is named Recycling or needs it, and saves from before
+// (version 3 and older, 68 advances, Recycling at index 53 between Railroad
+// and Refining) load with the later advances moved down one and Recycling
+// forgotten, also as a research goal.
+static void test_no_recycling()
+{
+    for (int i = 0; i < kAdvanceCount; ++i) {
+        const AdvanceInfo &a = advance_info(static_cast<Advance>(i));
+        CHECK(std::strcmp(a.name, "Recycling") != 0);
+        CHECK(a.req1 == Advance::None || static_cast<int>(a.req1) < kAdvanceCount);
+        CHECK(a.req2 == Advance::None || static_cast<int>(a.req2) < kAdvanceCount);
+    }
+    CHECK_EQ(static_cast<int>(Advance::Railroad), 52);
+    CHECK_EQ(static_cast<int>(Advance::Refining), 53);
+    // A version 3 save. Civ 0 knows Railroad, Recycling and Theory of
+    // Gravity and is researching Recycling; civ 1 knows Refining and is
+    // researching Robotics (old index 57).
+    Game v = flat_game();
+    v.civs[0].techs.fill(false);
+    v.civs[1].techs.fill(false);
+    std::string old = save_game(v);
+    old.replace(0, std::strlen("LUNDUKECIV 4"), "LUNDUKECIV 3");
+    for (int civ = 0; civ < 2; ++civ) {
+        size_t at = 0;
+        for (int k = 0; k <= civ; ++k) at = old.find("civ|", at + (k ? 1 : 0));
+        const size_t eol = old.find('\n', at);
+        std::string line = old.substr(at, eol - at);
+        std::vector<std::string> f;
+        size_t p0 = 0;
+        for (size_t p1; (p1 = line.find('|', p0)) != std::string::npos; p0 = p1 + 1) f.push_back(line.substr(p0, p1 - p0));
+        f.push_back(line.substr(p0));
+        std::string techs(68, '0');
+        if (civ == 0) {
+            techs[52] = '1';   // Railroad
+            techs[53] = '1';   // Recycling
+            techs[63] = '1';   // Theory of Gravity (62 now)
+            f[14] = "53";
+        } else {
+            techs[54] = '1';   // Refining (53 now)
+            f[14] = "57";      // Robotics (56 now)
+        }
+        f[13] = techs;
+        std::string nl;
+        for (size_t i = 0; i < f.size(); ++i) nl += (i ? "|" : "") + f[i];
+        old.replace(at, eol - at, nl);
+    }
+    Game w;
+    std::string err;
+    CHECK(load_game(old, w, &err));
+    CHECK(err.empty());
+    CHECK(w.has(0, Advance::Railroad));
+    CHECK(w.has(0, Advance::TheoryOfGravity));
+    CHECK(!w.has(0, Advance::Refining));
+    CHECK_EQ(w.techs_known(0), 2);
+    CHECK(w.civs[0].research == Advance::None);
+    CHECK(w.has(1, Advance::Refining));
+    CHECK_EQ(w.techs_known(1), 1);
+    CHECK(w.civs[1].research == Advance::Robotics);
+    // Saved again it is a version 4 save that loads the same.
+    const std::string again = save_game(w);
+    CHECK(again.rfind("LUNDUKECIV 4\n", 0) == 0);
+    Game x;
+    CHECK(load_game(again, x));
+    CHECK(save_game(x) == again);
+}
+
+// Specialists as in the DOS game: an entertainer makes 2 luxuries, a
+// taxman 2 gold, a scientist 2 bulbs, all before the Marketplace, Bank,
+// Library and University multiply them. Clicking one cycles entertainer ->
+// taxman -> scientist -> entertainer, but only in a city of size 5 or more.
+static void test_specialists()
+{
+    Game g = flat_game();
+    g.difficulty = Difficulty::Chieftain;   // six content citizens: no disorder to settle
+    g.civs[0].govt = Government::Monarchy;
+    g.civs[0].tax = 4;
+    g.civs[0].lux = 0;
+    g.civs[0].sci = 6;
+    const int s = place(g, 0, UnitType::Settlers, 20, 20);
+    CHECK(g.found_city(s, "Specton"));
+    const int cid = g.cities.back().id;
+    City *c = g.city(cid);
+    c->size = 4;
+    g.update_city(*c);
+    CHECK_EQ(c->specialists(), 0);
+    // Take a worker off the land: an entertainer. Too small for taxmen.
+    const auto w0 = c->worked.front();
+    g.toggle_tile(cid, w0.first, w0.second);
+    c = g.city(cid);
+    CHECK_EQ(c->entertainers, 1);
+    CHECK(!g.cycle_specialist(cid, 0));
+    CHECK_EQ(c->entertainers, 1);
+    CHECK_EQ(c->taxmen, 0);
+
+    // Size 6 with two specialists.
+    c->size = 6;
+    c->manual = false;
+    g.update_city(*c);
+    for (int k = 0; k < 2; ++k) {
+        const auto w = c->worked.back();
+        g.toggle_tile(cid, w.first, w.second);
+    }
+    CHECK(c->manual);
+    CHECK_EQ(c->entertainers, 2);
+    const CityStats two_ent = c->stats;
+    CHECK_EQ(two_ent.happy + two_ent.content + two_ent.unhappy, 4);   // specialists are neither
+    CHECK(g.cycle_specialist(cid, 0));                                 // entertainer -> taxman
+    CHECK_EQ(c->entertainers, 1);
+    CHECK_EQ(c->taxmen, 1);
+    CHECK_EQ(c->stats.tax, two_ent.tax + 2);
+    CHECK_EQ(c->stats.lux, two_ent.lux - 2);
+    CHECK_EQ(c->stats.sci, two_ent.sci);
+    CHECK(g.cycle_specialist(cid, 1));                                 // taxman -> scientist
+    CHECK_EQ(c->taxmen, 0);
+    CHECK_EQ(c->scientists, 1);
+    CHECK_EQ(c->stats.tax, two_ent.tax);
+    CHECK_EQ(c->stats.sci, two_ent.sci + 2);
+    CHECK(g.cycle_specialist(cid, 1));                                 // scientist -> entertainer
+    CHECK_EQ(c->scientists, 0);
+    CHECK_EQ(c->entertainers, 2);
+    CHECK_EQ(c->stats.lux, two_ent.lux);
+    CHECK(!g.cycle_specialist(cid, 2));                                // no third specialist
+
+    // One of each kind, then a Library and a Marketplace multiply them.
+    CHECK(g.cycle_specialist(cid, 0));                                 // ent, tax
+    CHECK(g.cycle_specialist(cid, 0));                                 // tax, tax
+    CHECK(g.cycle_specialist(cid, 1));                                 // tax, sci
+    CHECK_EQ(c->taxmen, 1);
+    CHECK_EQ(c->scientists, 1);
+    const int land_tax = two_ent.tax, land_sci = two_ent.sci;
+    c->add(Building::Library);
+    c->add(Building::Marketplace);
+    g.update_city(*c);
+    CHECK_EQ(c->stats.sci, (land_sci + 2) * 150 / 100);
+    CHECK_EQ(c->stats.tax, (land_tax + 2) * 3 / 2);
+
+    // Saved and loaded.
+    Game back;
+    CHECK(load_game(save_game(g), back));
+    if (const City *bc = back.city(cid)) {
+        CHECK_EQ(bc->taxmen, 1);
+        CHECK_EQ(bc->scientists, 1);
+        CHECK_EQ(bc->stats.tax, c->stats.tax);
+    }
+
+    // Putting a specialist back to work takes an entertainer first, then
+    // a taxman, then a scientist.
+    {
+        int fx = 9, fy = 9;
+        for (int dy = -2; dy <= 2 && fx == 9; ++dy)
+            for (int dx = -2; dx <= 2 && fx == 9; ++dx) {
+                if ((!dx && !dy) || (std::abs(dx) == 2 && std::abs(dy) == 2)) continue;
+                bool used = false;
+                for (const auto &w : c->worked) used |= w.first == dx && w.second == dy;
+                if (!used) fx = dx, fy = dy;
+            }
+        g.toggle_tile(cid, fx, fy);
+    }
+    CHECK_EQ(c->specialists(), 1);
+    CHECK_EQ(c->taxmen, 0);
+    CHECK_EQ(c->scientists, 1);
+
+    // Under Anarchy scientists find nothing; taxmen still collect.
+    c->remove(Building::Library);
+    c->remove(Building::Marketplace);
+    g.civs[0].govt = Government::Anarchy;
+    g.update_city(*c);
+    CHECK_EQ(c->stats.sci, 0);
+    CHECK(g.cycle_specialist(cid, 0));                                 // scientist -> entertainer
+    CHECK(g.cycle_specialist(cid, 0));                                 // -> taxman
+    CHECK_EQ(c->stats.tax, 2);
+    g.civs[0].govt = Government::Monarchy;
+
+    // A city that shrinks below 5 keeps only entertainers.
+    c->size = 4;
+    g.update_city(*c);
+    CHECK_EQ(c->taxmen, 0);
+    CHECK_EQ(c->scientists, 0);
+    CHECK_EQ(c->entertainers, c->size - static_cast<int>(c->worked.size()));
+}
+
+// Corruption as DOS Civilization 475.05 works it out:
+//   trade * distance * 3 / (20 * government + 80), Courthouse halves,
+//   Communism counts 10 squares, Democracy none, no Palace 32 squares.
+// Hand-worked examples.
+static void test_corruption()
+{
+    Game g = flat_game();
+    // The DOS distance: the long leg plus half the short one, rounded down.
+    CHECK_EQ(g.map.dos_distance(20, 20, 27, 23), 8);    // 7 + 3/2
+    CHECK_EQ(g.map.dos_distance(20, 20, 24, 24), 6);    // 4 + 4/2
+    CHECK_EQ(g.map.dos_distance(20, 20, 20, 29), 9);
+    CHECK_EQ(g.map.dos_distance(1, 10, 78, 11), 3);     // across the date line: 3 + 1/2
+    // 20 trade, 8 squares: 480 / divisor.
+    CHECK_EQ(dos_corruption(20, 8, Government::Anarchy, false), 6);    // 480 / 80
+    CHECK_EQ(dos_corruption(20, 8, Government::Despotism, false), 4);  // 480 / 100 = 4.8
+    CHECK_EQ(dos_corruption(20, 8, Government::Monarchy, false), 4);   // 480 / 120
+    CHECK_EQ(dos_corruption(20, 8, Government::Republic, false), 3);   // 480 / 160 = 3.0
+    CHECK_EQ(dos_corruption(20, 8, Government::Democracy, false), 0);
+    CHECK_EQ(dos_corruption(20, 8, Government::Monarchy, true), 2);    // halved
+    CHECK_EQ(dos_corruption(20, 8, Government::Despotism, true), 2);   // 4 / 2
+    // Communism always counts 10 squares: 600 / 140 = 4.28.
+    CHECK_EQ(dos_corruption(20, kCommunismDistance, Government::Communism, false), 4);
+    // No Palace: 32 squares. 10 trade under Despotism: 960 / 100 = 9.6.
+    CHECK_EQ(dos_corruption(10, kNoPalaceDistance, Government::Despotism, false), 9);
+    // 17 trade, 13 squares, Republic: 663 / 160 = 4.1; a Courthouse: 2.
+    CHECK_EQ(dos_corruption(17, 13, Government::Republic, false), 4);
+    CHECK_EQ(dos_corruption(17, 13, Government::Republic, true), 2);
+    CHECK_EQ(dos_corruption(5, 0, Government::Despotism, false), 0);   // the capital
+
+    // In a game: a capital and a town 8 squares off.
+    const int s1 = place(g, 0, UnitType::Settlers, 20, 20);
+    CHECK(g.found_city(s1, "Capitol"));
+    const int s2 = place(g, 0, UnitType::Settlers, 27, 23);
+    CHECK(g.found_city(s2, "Farfield"));
+    City *cap = g.city_at(20, 20);
+    City *town = g.city_at(27, 23);
+    CHECK(cap && town && cap->has(Building::Palace) && !town->has(Building::Palace));
+    if (!cap || !town) return;
+    town->size = 6;
+    for (int dy = -2; dy <= 2; ++dy)
+        for (int dx = -2; dx <= 2; ++dx) g.map.at(27 + dx, 23 + dy).road = true;
+    for (Government gv : {Government::Anarchy, Government::Despotism, Government::Monarchy, Government::Communism,
+                          Government::Republic, Government::Democracy}) {
+        g.civs[0].govt = gv;
+        g.update_city(*town);
+        g.update_city(*cap);
+        const int want_d = gv == Government::Communism ? 10 : 8;
+        CHECK_EQ(town->stats.palace_distance, want_d);
+        CHECK(town->stats.raw.trade > 0);
+        CHECK_EQ(town->stats.corruption, dos_corruption(town->stats.raw.trade, want_d, gv, false));
+        // The capital has none, except under Communism (10 squares there too).
+        CHECK_EQ(cap->stats.corruption, gv == Government::Communism ? cap->stats.raw.trade * 30 / 140 : 0);
+    }
+    // Monarchy, by hand: the town's trade times 8 x 3 / 120, then a Courthouse.
+    g.civs[0].govt = Government::Monarchy;
+    g.update_city(*town);
+    const int t = town->stats.raw.trade;
+    CHECK_EQ(town->stats.corruption, t * 24 / 120);
+    town->add(Building::Courthouse);
+    g.update_city(*town);
+    CHECK_EQ(town->stats.corruption, t * 24 / 120 / 2);
+    town->remove(Building::Courthouse);
+    // The Palace lost: 32 squares.
+    cap->remove(Building::Palace);
+    g.update_city(*town);
+    CHECK_EQ(town->stats.palace_distance, kNoPalaceDistance);
+    CHECK_EQ(town->stats.corruption, t * 32 * 3 / 120);
+}
+
+// Research cost as in DOS Civilization 475.05: an advance is found when
+// bulbs / m > known x ratio (m = 1 BC, 2 AD), ratio = 2 x level + 6 for a
+// human (at least 11 - known), 14 - level for a computer, plus the catch-up
+// step, and never fewer than 10 bulbs. Hand-worked examples.
+static void test_research_cost()
+{
+    Game g = flat_game();
+    CHECK(!g.civs[0].ai);
+    CHECK(g.civs[1].ai);
+    auto know = [&](int civ, int n) {
+        g.civs[civ].techs.fill(false);
+        g.civs[civ].future = 0;
+        for (int a = 0; a < n; ++a) g.civs[civ].techs[a] = true;
+        CHECK_EQ(g.techs_known(civ), n);
+    };
+    g.turn = 1;   // 4000 BC
+    g.tech_catchup = 0;
+    // Prince, human, 5 known: ratio max(10, 6) = 10; found past 50 bulbs.
+    g.difficulty = Difficulty::Prince;
+    know(0, 5);
+    CHECK_EQ(g.research_ratio(0), 10);
+    CHECK_EQ(g.research_cost(0), 51);
+    // Computer on Prince: 14 - 2 = 12 per advance: 61.
+    know(1, 5);
+    CHECK_EQ(g.research_ratio(1), 12);
+    CHECK_EQ(g.research_cost(1), 61);
+    // No advances yet: the DOS formula says 0 x ratio + 1 = 1 bulb, but no
+    // advance costs fewer than 10 (the FAQ's "at least 10"), human or computer.
+    know(0, 0);
+    CHECK_EQ(g.research_cost(0), 10);
+    know(1, 0);
+    CHECK_EQ(g.research_cost(1), 10);
+    CHECK_EQ(Game::kMinResearchCost, 10);
+    // King, human, 1 known: ratio 12 (11 - 1 = 10 is less): 13.
+    g.difficulty = Difficulty::King;
+    know(0, 1);
+    CHECK_EQ(g.research_cost(0), 13);
+    // Chieftain: the "at least 10 for the first advance" rule is 11 - known.
+    g.difficulty = Difficulty::Chieftain;
+    CHECK_EQ(g.research_ratio(0), 10);   // max(6, 10)
+    CHECK_EQ(g.research_cost(0), 11);
+    know(0, 3);
+    CHECK_EQ(g.research_ratio(0), 8);    // max(6, 8)
+    CHECK_EQ(g.research_cost(0), 25);
+    know(0, 6);
+    CHECK_EQ(g.research_ratio(0), 6);
+    CHECK_EQ(g.research_cost(0), 37);
+    CHECK_EQ(g.research_ratio(1), 14);   // computers find Chieftain hardest
+    // Emperor computer, 20 known, after 1 AD: 2 x (20 x 10 + 1) = 402.
+    g.difficulty = Difficulty::Emperor;
+    int ad = 1;
+    while (year_for_turn(ad) < 0) ++ad;
+    CHECK_EQ(year_for_turn(ad), 1);
+    CHECK_EQ(year_for_turn(ad - 1), -20);
+    g.turn = ad;
+    know(1, 20);
+    CHECK_EQ(g.research_cost(1), 402);
+    // Emperor human, 20 known, AD: 2 x (20 x 14 + 1) = 562.
+    know(0, 20);
+    CHECK_EQ(g.research_cost(0), 562);
+    // The catch-up step adds to everyone's ratio: Prince human, 20 known,
+    // catch-up 3, BC: 20 x 13 + 1 = 261.
+    g.difficulty = Difficulty::Prince;
+    g.turn = 1;
+    g.tech_catchup = 3;
+    CHECK_EQ(g.research_cost(0), 261);
+    // Future Tech counts as an advance known.
+    g.civs[0].future = 2;
+    CHECK_EQ(g.research_cost(0), 22 * 13 + 1);
+    g.civs[0].future = 0;
+
+    // The catch-up step: every 50 turns, from AD, most known - turn / 9,
+    // 0 to 6. DOS counts turns from 0, so our turn 251 is its 250.
+    g.tech_catchup = 0;
+    know(0, 10);
+    know(1, 30);
+    g.turn = 251;
+    CHECK(year_for_turn(251) > 0);
+    // Through end_turn, on a world with no cities, from the turn before.
+    g.turn = 250;
+    g.end_turn();
+    CHECK_EQ(g.turn, 251);
+    CHECK_EQ(g.tech_catchup, 30 - 250 / 9);   // 3
+    g.turn = 300;
+    know(1, 60);
+    g.end_turn();                               // turn 301: 60 - 33 = 27, at most 6
+    CHECK_EQ(g.tech_catchup, 6);
+    g.end_turn();                               // turn 302: unchanged
+    CHECK_EQ(g.tech_catchup, 6);
+    g.turn = 100;
+    g.end_turn();                               // turn 101 is BC: none
+    CHECK(year_for_turn(101) < 0);
+    CHECK_EQ(g.tech_catchup, 0);
+
+    // Finding an advance: not at cost - 1, at cost; left-over bulbs are lost.
+    Game r = flat_game();
+    r.difficulty = Difficulty::Prince;
+    const int s = place(r, 0, UnitType::Settlers, 20, 20);
+    CHECK(r.found_city(s, "Lab"));
+    r.civs[0].sci = 10;
+    r.civs[0].tax = 0;
+    r.civs[0].lux = 0;
+    r.civs[0].govt = Government::Monarchy;
+    r.civs[0].techs.fill(false);
+    r.civs[0].techs[static_cast<int>(Advance::Alphabet)] = true;
+    r.civs[0].techs[static_cast<int>(Advance::BronzeWorking)] = true;
+    r.civs[0].research = Advance::Writing;
+    r.update_city(r.cities.back());
+    const int per_turn = r.cities.back().stats.sci;
+    CHECK(per_turn > 0);
+    CHECK_EQ(r.research_cost(0), 2 * 10 + 1);   // max(10, 9) per advance
+    r.civs[0].bulbs = r.research_cost(0) - per_turn - 1;
+    r.end_turn();
+    CHECK(!r.has(0, Advance::Writing));
+    CHECK_EQ(r.civs[0].bulbs, r.research_cost(0) - 1);
+    r.civs[0].bulbs = r.research_cost(0) - per_turn + 5;   // 5 over
+    r.end_turn();
+    CHECK(r.has(0, Advance::Writing));
+    CHECK_EQ(r.civs[0].bulbs, 0);
+
+    // The first year AD doubles the bulbs in hand.
+    Game a = flat_game();
+    a.turn = ad - 1;
+    a.civs[0].research = Advance::Alphabet;
+    for (int civ = 0; civ < 2; ++civ)
+        for (int k = 0; k < 20; ++k) a.civs[civ].techs[k + 30] = true;   // far from the next advance
+    a.civs[0].bulbs = 3;
+    a.civs[1].bulbs = 7;
+    a.end_turn();
+    CHECK_EQ(a.turn, ad);
+    CHECK_EQ(a.civs[0].bulbs, 6);
+    CHECK_EQ(a.civs[1].bulbs, 14);
+
+    // Chieftain: a human's bulbs count twice toward an advance a rival knows.
+    for (int known_by_rival = 0; known_by_rival < 2; ++known_by_rival) {
+        Game c = flat_game();
+        c.difficulty = Difficulty::Chieftain;
+        const int cs = place(c, 0, UnitType::Settlers, 20, 20);
+        CHECK(c.found_city(cs, "Easy"));
+        c.civs[0].sci = 10;
+        c.civs[0].tax = 0;
+        c.civs[0].lux = 0;
+        c.civs[0].research = Advance::Pottery;
+        c.civs[0].bulbs = 0;
+        for (int k = 0; k < 20; ++k) c.civs[0].techs[k + 30] = true;   // a dear next advance
+        c.civs[1].techs[static_cast<int>(Advance::Pottery)] = known_by_rival != 0;
+        c.update_city(c.cities.back());
+        const int sci = c.cities.back().stats.sci;
+        c.end_turn();
+        CHECK_EQ(c.civs[0].bulbs, known_by_rival ? 2 * sci : sci);
+    }
+
+    // Saved and loaded with the game.
+    g.tech_catchup = 4;
+    Game back;
+    CHECK(load_game(save_game(g), back));
+    CHECK_EQ(back.tech_catchup, 4);
 }
 
 static void test_barbarians()
@@ -990,7 +1488,7 @@ int main(int argc, char **argv)
         {"units_table", test_units_table}, {"combat_odds", test_combat_odds},       {"city_growth", test_city_growth},
         {"settlers_work", test_settlers_work}, {"movement", test_movement},          {"save_roundtrip", test_save_roundtrip},
         {"ai_smoke", test_ai_smoke},           {"wonders", test_wonders}, {"envoys", test_envoys},
-        {"rail_pollution", test_rail_pollution}, {"barbarians", test_barbarians}, {"space_race", test_space_race}, {"pad_nav", test_pad_nav},
+        {"railroads", test_railroads}, {"no_pollution", test_no_pollution}, {"no_recycling", test_no_recycling}, {"specialists", test_specialists}, {"corruption", test_corruption}, {"research_cost", test_research_cost}, {"barbarians", test_barbarians}, {"space_race", test_space_race}, {"pad_nav", test_pad_nav},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();

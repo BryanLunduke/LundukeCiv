@@ -50,7 +50,7 @@ enum class Advance : std::uint8_t {
     Feudalism, Flight, FusionPower, FutureTech, GeneticEngineering, Gunpowder, HorsebackRiding,
     Industrialization, Invention, IronWorking, LaborUnion, Literacy, Magnetism, MapMaking, Masonry,
     MassProduction, Mathematics, Medicine, Metallurgy, Monarchy, Mysticism, Navigation, NuclearFission,
-    NuclearPower, Philosophy, Physics, Plastics, Pottery, Railroad, Recycling, Refining, Religion,
+    NuclearPower, Philosophy, Physics, Plastics, Pottery, Railroad, Refining, Religion,
     Republic, Robotics, Rocketry, SpaceFlight, SteamEngine, Steel, Superconductor, TheoryOfGravity,
     Trade, University, TheWheel, Writing,
     Count,
@@ -109,8 +109,7 @@ inline const UnitInfo &unit_info(int u) { return unit_info(static_cast<UnitType>
 
 enum class Building : std::uint8_t {
     Palace, Barracks, Granary, Temple, Marketplace, Library, Courthouse, CityWalls, Aqueduct, Colosseum,
-    Cathedral, University, Bank, Factory, PowerPlant, HydroPlant, NuclearPlant, MassTransit, MfgPlant,
-    RecyclingCenter, SdiDefense,
+    Cathedral, University, Bank, Factory, PowerPlant, HydroPlant, NuclearPlant, MfgPlant, SdiDefense,
     Count,
 };
 constexpr int kBuildingCount = static_cast<int>(Building::Count);
@@ -167,11 +166,20 @@ struct GovernmentInfo {
     const char *name;
     Advance tech;
     int max_rate;          // tenths for any one of tax/lux/sci
-    int corruption_pct;    // per tile from the capital, in tenths of a percent
     int settler_food;
     int free_units;        // -1: city size
 };
 const GovernmentInfo &government_info(Government g);
+
+// Corruption, exactly as DOS Civilization 475.05 works it out (see README):
+//   corruption = trade * distance * 3 / (20 * government + 80)
+// with government numbered Anarchy 0, Despotism 1, Monarchy 2, Communism 3,
+// Republic 4 (Democracy has none), integer division, then halved (rounded
+// down) by a Courthouse. `distance` is to the Palace (dos_distance, 0 in the
+// capital, 32 with no Palace); under Communism it is always 10.
+constexpr int kNoPalaceDistance = 32;
+constexpr int kCommunismDistance = 10;
+int dos_corruption(int trade, int distance, Government g, bool courthouse);
 
 enum class Difficulty : std::uint8_t { Chieftain, Warlord, Prince, King, Emperor, Count };
 const char *difficulty_name(Difficulty d);

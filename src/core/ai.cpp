@@ -173,8 +173,6 @@ void Game::ai_city(City &c)
         {Building::Cathedral, c.size >= 9 && (st.unhappy > 0 || c.entertainers > 1)},
         {Building::Factory, c.size >= 7 && st.raw.shields >= 8},
         {Building::PowerPlant, c.size >= 8},
-        {Building::MassTransit, c.size >= 12},
-        {Building::RecyclingCenter, c.size >= 12},
     };
     // Core buildings still wanted here come before wonders, caravans and
     // spaceship parts most of the time.

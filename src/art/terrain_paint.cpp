@@ -487,36 +487,6 @@ void paint_rails(Canvas &cv)
     }
 }
 
-// Pollution: a sooty, oily smear over the square -- grey-brown puffs with a
-// dithered edge, black specks and a sickly green sheen.
-void paint_pollution(Canvas &cv, int ox, int oy, int seed)
-{
-    struct Puff { double x, y, r; };
-    const Puff puffs[] = {{9, 11, 6.5}, {20, 9, 5.5}, {15, 19, 7.5}, {24, 21, 5.0}, {7, 23, 4.5}};
-    for (int y = 0; y < kTile; ++y) {
-        for (int x = 0; x < kTile; ++x) {
-            double best = 9, lit = 0;
-            for (const Puff &p : puffs) {
-                const double dx = x + 0.5 - p.x, dy = y + 0.5 - p.y;
-                const double d = std::sqrt(dx * dx + dy * dy) / p.r;
-                if (d < best) {
-                    best = d;
-                    lit = -(dx + dy) / p.r;   // light from the top left
-                }
-            }
-            if (best > 1.0) continue;
-            const bool edge = best > 0.78;
-            if (edge && ((x + y + seed) & 1)) continue;   // ragged, dithered rim
-            Argb c = rgb(0x5E5850);
-            if (best < 0.45) c = rgb(0x48443E);
-            if (!edge && lit > 0.55 && best > 0.35) c = (x + y) & 1 ? rgb(0x9A9488) : rgb(0x7E786C);
-            if (!edge && ((x * 7 + y * 13 + seed) % 23) == 0) c = rgb(0x141210);
-            if (!edge && best > 0.5 && best < 0.62 && ((x + 2 * y + seed) % 5) == 0) c = rgb(0x7A8A3A);
-            cv.pm.set(ox + x, oy + y, c);
-        }
-    }
-}
-
 // --- terrain features -----------------------------------------------------------
 
 void tree(Pixmap &pm, int cx, int cy, int r, bool jungle, int seed)
@@ -745,14 +715,6 @@ Pixmap render_canvas(const PaintWorld &w, int x0, int y0, int cols, int rows)
     for (int ty = 0; ty < cv.rows; ++ty) {
         for (int tx = 0; tx < cv.cols; ++tx) {
             const int wx = cv.tx0 + tx, wy = cv.ty0 + ty;
-            if (w.at(wx, wy).pollution && !w.city_at(wx, wy)) {
-                paint_pollution(cv, tx * kTile, ty * kTile, wx * 3 + wy * 5);
-            }
-        }
-    }
-    for (int ty = 0; ty < cv.rows; ++ty) {
-        for (int tx = 0; tx < cv.cols; ++tx) {
-            const int wx = cv.tx0 + tx, wy = cv.ty0 + ty;
             const PaintTile &t = w.at(wx, wy);
             if (t.special != Special::None && !w.city_at(wx, wy)) {
                 Pixmap s = special_sprite(t.special);
@@ -893,7 +855,6 @@ PaintTile paint_tile(const civ::Tile &t, bool city)
     PaintTile p;
     p.road = t.road || city;
     p.rail = t.railroad;
-    p.pollution = t.pollution;
     p.irrigated = t.irrigation;
     p.mine = t.mine;
     p.hut = t.hut;

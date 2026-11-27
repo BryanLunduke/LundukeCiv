@@ -230,6 +230,18 @@ City *Game::capital(int civ)
     }
     return nullptr;
 }
+
+int Game::palace_distance(const City &c) const
+{
+    if (c.owner >= 0 && c.owner < static_cast<int>(civs.size()) && civs[c.owner].govt == Government::Communism) return kCommunismDistance;
+    if (c.has(Building::Palace)) return 0;
+    int d = kNoPalaceDistance;
+    for (const City &o : cities) {
+        if (o.id != c.id && o.owner == c.owner && o.has(Building::Palace)) d = std::min(d, map.dos_distance(c.x, c.y, o.x, o.y));
+    }
+    return d;
+}
+
 int Game::cargo_count(int ship_id) const
 {
     int n = 0;
@@ -429,11 +441,57 @@ std::vector<Advance> Game::researchable(int civ) const
     return out;
 }
 
+// Sources: DOS Civilization 475.05's end-of-city research step as rewritten
+// from its disassembly by OpenCivOne (codeberg.org/rhorvat/OpenCivOne,
+// CityWorker.cs and GameEngine.cs: "technologyDifficultyRatio", Var_d2de,
+// the progress doubling at the start of AD), which agrees with "LightBulbs =
+// PreviousAdvances x DifficultyModifier x TimeModifier" (6/8/10/12/14 by
+// level, x2 after 1 AD, at least 10 for the first advance) quoted from
+// "Sid Meier's Civilization, or Rome on 640K a Day" in the CivFanatics Civ1
+// FAQ (section D, tip 2), and with the computer players' +14/+13/+12/+11/+10
+// per advance in the CivFanatics difficulty table.
+int Game::research_ratio(int civ) const
+{
+    const int level = static_cast<int>(difficulty);
+    int ratio = (civs[civ].ai ? 14 - level : 2 * level + 6) + tech_catchup;
+    if (!civs[civ].ai) ratio = std::max(ratio, 11 - techs_known(civ));
+    return ratio;
+}
+
+// The DOS formula gives 1 bulb for a civilization's very first advance; this
+// game follows the FAQ's "at least 10" instead and never charges less than
+// kMinResearchCost bulbs for any advance.
 int Game::research_cost(int civ) const
 {
-    // Linear in advances known, steeper on harder levels (see README).
-    const int mult = 6 + 2 * static_cast<int>(difficulty);
-    return std::max(mult, (techs_known(civ) + 1) * mult);
+    const int m = year_for_turn(turn) < 0 ? 1 : 2;
+    return std::max(kMinResearchCost, m * (techs_known(civ) * research_ratio(civ) + 1));
+}
+
+void Game::check_research(int ci)
+{
+    Civ &civ = civs[ci];
+    if (civ.research == Advance::None || civ.barbarian || civ.bulbs < research_cost(ci)) return;
+    civ.bulbs = 0;   // the DOS game starts the next advance from nothing
+    const Advance a = civ.research;
+    learn(ci, a);
+    say(ci, MsgKind::Tech, std::string("Your wise men discover ") + advance_info(a).name + "!");
+    if (civ.ai) choose_research_ai(ci);
+}
+
+void Game::update_tech_catchup()
+{
+    // Every 50 turns (the DOS turn counter starts at 0 in 4000 BC) while a
+    // human plays; nothing before AD.
+    if ((turn - 1) % 50 != 0) return;
+    bool human_plays = false;
+    int most = 0;
+    for (int k = 0; k < static_cast<int>(civs.size()); ++k) {
+        if (civs[k].barbarian) continue;
+        human_plays |= !civs[k].ai;
+        most = std::max(most, techs_known(k));
+    }
+    if (!human_plays) return;
+    tech_catchup = year_for_turn(turn) < 0 ? 0 : std::clamp(most - (turn - 1) / 9, 0, 6);
 }
 
 void Game::learn(int civ, Advance a)
@@ -520,11 +578,6 @@ Yield Game::tile_yield(int x, int y, int civ, bool centre) const
     }
     if (centre) v.shields = std::max(1, v.shields);
     if (t.railroad) v.shields += v.shields / 2;
-    if (t.pollution) {
-        v.food /= 2;
-        v.shields /= 2;
-        v.trade /= 2;
-    }
     return v;
 }
 
@@ -558,7 +611,7 @@ void Game::arrange_workers(City &c)
         if (!tile_free_for(c, x, y)) continue;
         cands.push_back({o[0], o[1], tile_yield(x, y, c.owner, false)});
     }
-    int workers = std::max(0, c.size - c.entertainers);
+    int workers = std::max(0, c.size - c.specialists());
     const Yield centre = tile_yield(c.x, c.y, c.owner, true);
     int food = centre.food;
     const int need = c.size * 2 + 2; // eaters plus room to grow
@@ -573,13 +626,22 @@ void Game::arrange_workers(City &c)
         cands.erase(best);
     }
     // Not enough land: the rest entertain.
-    c.entertainers = c.size - static_cast<int>(c.worked.size());
+    settle_specialists(c);
+}
+
+void Game::settle_specialists(City &c) const
+{
+    const int total = std::max(0, c.size - static_cast<int>(c.worked.size()));
+    if (c.size < kSpecialistSize) c.taxmen = c.scientists = 0;
+    c.taxmen = std::clamp(c.taxmen, 0, total);
+    c.scientists = std::clamp(c.scientists, 0, total - c.taxmen);
+    c.entertainers = total - c.taxmen - c.scientists;
 }
 
 void Game::update_city(City &c)
 {
     if (!c.manual) {
-        c.entertainers = 0;
+        c.entertainers = c.taxmen = c.scientists = 0;
         arrange_workers(c);
     } else {
         // Drop tiles that became unavailable.
@@ -587,8 +649,10 @@ void Game::update_city(City &c)
         for (const auto &w : c.worked) {
             if (tile_free_for(c, c.x + w.first, c.y + w.second)) keep.push_back(w);
         }
+        // A city that shrank has fewer workers to place.
+        if (static_cast<int>(keep.size()) > c.size) keep.resize(static_cast<size_t>(std::max(0, c.size)));
         c.worked = keep;
-        c.entertainers = std::max(0, c.size - static_cast<int>(c.worked.size()));
+        settle_specialists(c);
     }
     const Civ &civ = civs[c.owner];
     for (int pass = 0; pass < 12; ++pass) {
@@ -637,28 +701,10 @@ void Game::update_city(City &c)
             shields = shields * pct / 100;
         }
         s.shield_surplus = shields - s.shield_upkeep;
-        {
-            // Pollution: industry over 20 shields, and from Industrialization
-            // on, a crowd of citizens (unless Mass Transit carries them).
-            int industry = shields;
-            if (c.has(Building::RecyclingCenter)) industry /= 3;
-            if (c.has(Building::HydroPlant) || c.has(Building::NuclearPlant) || hoover_here(c)) industry = industry * 3 / 4;
-            int tech = 0;
-            for (Advance a : {Advance::Industrialization, Advance::Automobile, Advance::MassProduction, Advance::Plastics})
-                tech += has(c.owner, a) ? 1 : 0;
-            const int people = c.has(Building::MassTransit) ? 0 : c.size * tech / 4;
-            s.pollution = std::clamp(industry + people - 20, 0, 100);
-        }
-        // Corruption grows with distance from the Palace.
-        int dist = 20;
-        for (const City &o : cities) {
-            if (o.owner == c.owner && o.has(Building::Palace)) dist = map.distance(c.x, c.y, o.x, o.y);
-        }
-        int corr_pct = civ.govt == Government::Communism ? 20 : std::min(60, gi.corruption_pct * dist / 10);
-        if (civ.govt == Government::Democracy) corr_pct = 0;
-        if (c.has(Building::Courthouse)) corr_pct /= 2;
-        if (c.has(Building::Palace)) corr_pct = 0;
-        s.corruption = raw.trade * corr_pct / 100;
+        // Corruption grows with distance from the Palace (DOS formula, see
+        // dos_corruption): on all the city's trade, trade routes included.
+        s.palace_distance = palace_distance(c);
+        s.corruption = dos_corruption(raw.trade, s.palace_distance, civ.govt, c.has(Building::Courthouse));
         const int trade = raw.trade - s.corruption;
         int sci = (trade * civ.sci + 5) / 10;
         int lux = std::min(trade - sci, (trade * civ.lux + 5) / 10);
@@ -667,7 +713,11 @@ void Game::update_city(City &c)
             lux += sci + tax;
             sci = tax = 0;
         }
+        // Specialists, before the Marketplace, Bank, Library and University
+        // multiply them (DOS order). Under Anarchy scientists find nothing.
         lux += c.entertainers * 2;
+        tax += c.taxmen * 2;
+        if (civ.govt != Government::Anarchy) sci += c.scientists * 2;
         if (c.has(Building::Marketplace)) {
             tax = tax * 3 / 2;
             lux = lux * 3 / 2;
@@ -686,7 +736,7 @@ void Game::update_city(City &c)
         s.lux = lux;
         s.sci = sci;
         // Happiness.
-        const int workers = c.size - c.entertainers;
+        const int workers = c.size - c.specialists();
         int content = std::min(workers, content_base(difficulty));
         int unhappy = workers - content;
         int happy = 0;
@@ -777,7 +827,7 @@ void Game::update_city(City &c)
             return ya.food * 3 + ya.shields * 2 + ya.trade < yb.food * 3 + yb.shields * 2 + yb.trade;
         });
         c.worked.erase(worst);
-        c.entertainers = c.size - static_cast<int>(c.worked.size());
+        settle_specialists(c);
     }
 }
 
@@ -803,17 +853,6 @@ int Game::buy_cost(const City &c) const
     if (c.build_unit) cost = cost * 2; // units cost more to rush
     return cost;
 }
-
-// ---------------------------------------------------------------- pollution
-
-int Game::polluted_squares() const
-{
-    int n = 0;
-    for (const Tile &t : map.tiles) n += t.pollution;
-    return n;
-}
-
-int Game::pollution_chance(const City &c) const { return c.stats.pollution; }
 
 // ---------------------------------------------------------------- space race
 
@@ -900,54 +939,6 @@ void Game::space_arrivals()
         c.structurals = c.components = c.modules = 0;
         c.launch_turn = c.arrival_turn = -1;
     }
-}
-
-int Game::warming_risk() const { return std::min(100, warming * 100 / kWarmingThreshold); }
-
-void Game::pollute(City &c)
-{
-    std::vector<std::pair<int, int>> spots;
-    for (const auto &o : kCross) {
-        const int x = map.wrap_x(c.x + o[0]), y = c.y + o[1];
-        if (!map.land(x, y) || map.at(x, y).pollution) continue;
-        spots.push_back({x, y});
-    }
-    if (map.land(c.x, c.y) && !map.at(c.x, c.y).pollution) spots.push_back({c.x, c.y});
-    if (spots.empty()) return;
-    const auto p = spots[rng.below(static_cast<int>(spots.size()))];
-    map.at(p.first, p.second).pollution = true;
-    say(c.owner, MsgKind::Bad, "Pollution near " + c.name + ". Settlers can clean it up (P).", p.first, p.second);
-}
-
-void Game::global_warming()
-{
-    warming = 0;
-    ++warming_events;
-    // Coasts flood into swamp, fields dry to desert, forests turn to jungle.
-    int changed = 0;
-    for (int tries = 0; tries < 4000 && changed < 40; ++tries) {
-        const int x = rng.below(map.w), y = 2 + rng.below(map.h - 4);
-        Tile &t = map.at(x, y);
-        if (t.terrain == Terrain::Ocean || city_at(x, y)) continue;
-        Terrain to = t.terrain;
-        const bool coast = map.coastal(x, y);
-        switch (t.terrain) {
-        case Terrain::Grassland:
-        case Terrain::Plains: to = coast ? Terrain::Swamp : Terrain::Desert; break;
-        case Terrain::Desert: if (coast) to = Terrain::Swamp; break;
-        case Terrain::Forest: to = Terrain::Jungle; break;
-        case Terrain::Arctic: to = Terrain::Tundra; break;
-        case Terrain::Tundra: to = Terrain::Desert; break;
-        default: break;
-        }
-        if (to == t.terrain) continue;
-        t.terrain = to;
-        t.irrigation = false;
-        t.mine = false;
-        ++changed;
-    }
-    say(-1, MsgKind::Bad, "Global warming! Pollution has changed the climate: coasts turn to swamp and fields to desert.");
-    for (City &c : cities) update_city(c);
 }
 
 // ---------------------------------------------------------------- barbarians
@@ -1979,7 +1970,6 @@ bool Game::can_work(const Unit &u, Order job) const
         return true;
     case Order::Fortress: return has(u.owner, Advance::Construction) && !t.fortress && !city_at(u.x, u.y);
     case Order::Railroad: return has(u.owner, Advance::Railroad) && t.road && !t.railroad && !city_at(u.x, u.y);
-    case Order::Clean: return t.pollution;
     default: return false;
     }
 }
@@ -2185,14 +2175,16 @@ void Game::toggle_tile(int city_id, int dx, int dy)
     for (size_t i = 0; i < c->worked.size(); ++i) {
         if (c->worked[i].first == dx && c->worked[i].second == dy) {
             c->worked.erase(c->worked.begin() + static_cast<long>(i));
-            c->entertainers++;
-            update_city(*c);
+            update_city(*c);   // the citizen becomes an entertainer
             return;
         }
     }
     if (!tile_free_for(*c, c->x + dx, c->y + dy)) return;
-    if (c->entertainers > 0) {
-        c->entertainers--;
+    if (c->specialists() > 0) {
+        // An entertainer goes to work first, then a taxman, then a scientist.
+        if (c->entertainers > 0) c->entertainers--;
+        else if (c->taxmen > 0) c->taxmen--;
+        else c->scientists--;
     } else if (!c->worked.empty()) {
         c->worked.erase(c->worked.begin()); // move the first worker here
     } else {
@@ -2200,6 +2192,26 @@ void Game::toggle_tile(int city_id, int dx, int dy)
     }
     c->worked.push_back({dx, dy});
     update_city(*c);
+}
+
+bool Game::cycle_specialist(int city_id, int index)
+{
+    City *c = city(city_id);
+    if (!c || index < 0 || index >= c->specialists()) return false;
+    if (c->size < kSpecialistSize) return false;
+    c->manual = true;
+    if (index < c->entertainers) {
+        c->entertainers--;
+        c->taxmen++;
+    } else if (index < c->entertainers + c->taxmen) {
+        c->taxmen--;
+        c->scientists++;
+    } else {
+        c->scientists--;
+        c->entertainers++;
+    }
+    update_city(*c);
+    return true;
 }
 
 // ---------------------------------------------------------------- turn
@@ -2367,7 +2379,6 @@ void Game::process_city(City &c, bool &learned_any)
         ct.road = true;
         ct.railroad = true;
     }
-    if (s.pollution > 0 && rng.below(100) < s.pollution) pollute(c);
     if (!can_build(c, c.build_unit, c.build)) {
         c.build_unit = true;
         c.build = static_cast<int>(unit_available(c.owner, UnitType::Phalanx) ? UnitType::Phalanx : UnitType::Militia);
@@ -2463,6 +2474,15 @@ void Game::process_city(City &c, bool &learned_any)
     if (!s.disorder) {
         civ.gold += s.tax;
         civ.bulbs += s.sci;
+        // Chieftain: a human's bulbs count twice toward an advance someone
+        // has already found (DOS).
+        if (!civ.ai && difficulty == Difficulty::Chieftain && civ.research != Advance::None && civ.research != Advance::FutureTech) {
+            bool known = false;
+            for (int k = 0; k < static_cast<int>(civs.size()); ++k) known |= k != c.owner && !civs[k].barbarian && civs[k].techs[static_cast<int>(civ.research)];
+            if (known) civ.bulbs += s.sci;
+        }
+        // As in the DOS game each city's bulbs may finish the advance.
+        check_research(c.owner);
     }
 }
 
@@ -2547,13 +2567,7 @@ void Game::start_turn_for(int ci)
     }
     // Research.
     if (civ.research == Advance::None && civ.ai && !civ.barbarian) choose_research_ai(ci);
-    while (civ.research != Advance::None && civ.bulbs >= research_cost(ci)) {
-        civ.bulbs -= research_cost(ci);
-        const Advance a = civ.research;
-        learn(ci, a);
-        say(ci, MsgKind::Tech, std::string("Your wise men discover ") + advance_info(a).name + "!");
-        if (civ.ai) choose_research_ai(ci);
-    }
+    check_research(ci);
     // Units: new movement, terrain work, fortifying, fuel.
     std::vector<int> uids;
     for (const Unit &u : units) {
@@ -2576,7 +2590,7 @@ void Game::start_turn_for(int ci)
         }
         if (u->order == Order::Fortifying) u->order = Order::Fortified;
         if (u->order == Order::Road || u->order == Order::Irrigate || u->order == Order::Mine || u->order == Order::Fortress ||
-            u->order == Order::Railroad || u->order == Order::Clean) {
+            u->order == Order::Railroad) {
             u->moves = 0;
             Tile &t = map.at(u->x, u->y);
             const TerrainInfo &ti = terrain_info(t.terrain);
@@ -2587,7 +2601,6 @@ void Game::start_turn_for(int ci)
             case Order::Irrigate: need = ti.irrigate_turns; break;
             case Order::Mine: need = ti.mine_turns; break;
             case Order::Railroad: need = ti.road_turns * 2; break;
-            case Order::Clean: need = 3; break;
             default: need = ti.fortress_turns; break;
             }
             // Settlers working the same job on the square help each other.
@@ -2617,7 +2630,6 @@ void Game::start_turn_for(int ci)
                     }
                     break;
                 case Order::Railroad: t.railroad = true; break;
-                case Order::Clean: t.pollution = false; break;
                 default: t.fortress = true; break;
                 }
                 for (Unit &o : units) {
@@ -2647,16 +2659,14 @@ void Game::start_turn_for(int ci)
 void Game::new_turn()
 {
     ++turn;
+    // The first year AD doubles the bulbs everyone has toward their advance,
+    // as the cost doubles (DOS).
+    if (year_for_turn(turn - 1) < 0 && year_for_turn(turn) > 0) {
+        for (Civ &c : civs) c.bulbs *= 2;
+    }
+    update_tech_catchup();
     for (int c = 0; c < static_cast<int>(civs.size()); ++c) start_turn_for(c);
     spawn_barbarians();
-    // Global warming builds up while squares stay polluted.
-    const int polluted = polluted_squares();
-    if (polluted > 0) {
-        warming += polluted;
-    } else {
-        warming = std::max(0, warming - 10);
-    }
-    if (warming >= kWarmingThreshold) global_warming();
     space_arrivals();
     check_elimination();
     refresh_visibility();

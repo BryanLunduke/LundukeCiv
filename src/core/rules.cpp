@@ -80,7 +80,6 @@ const AdvanceInfo kAdvances[kAdvanceCount] = {
     {"Plastics", A::Refining, A::SpaceFlight},
     {"Pottery", A::None, A::None},
     {"Railroad", A::BridgeBuilding, A::SteamEngine},
-    {"Recycling", A::MassProduction, A::Democracy},
     {"Refining", A::Corporation, A::Chemistry},
     {"Religion", A::Philosophy, A::Writing},
     {"The Republic", A::CodeOfLaws, A::Literacy},
@@ -149,9 +148,7 @@ const BuildingInfo kBuildings[kBuildingCount] = {
     {"Power Plant", 160, 4, A::Refining, "Shields +50% (needs a Factory)."},
     {"Hydro Plant", 240, 4, A::Electronics, "Shields +50% (needs a Factory)."},
     {"Nuclear Plant", 160, 2, A::NuclearPower, "Shields +50% (needs a Factory)."},
-    {"Mass Transit", 160, 4, A::MassProduction, "No pollution from population."},
     {"Mfg. Plant", 320, 6, A::Robotics, "Shields +100% (needs a Factory)."},
-    {"Recycling Center", 200, 2, A::Recycling, "Industrial pollution -66%."},
     {"SDI Defense", 200, 4, A::Superconductor, "Protects the city from nuclear attack."},
 };
 
@@ -180,16 +177,33 @@ const WonderInfo kWonders[kWonderCount] = {
 };
 
 const GovernmentInfo kGovernments[static_cast<int>(Government::Count)] = {
-    {"Anarchy", A::None, 0, 30, 1, -1},
-    {"Despotism", A::None, 6, 20, 1, -1},
-    {"Monarchy", A::Monarchy, 7, 15, 1, 3},
-    {"Communism", A::Communism, 8, 0, 1, 3},
-    {"Republic", A::Republic, 8, 10, 2, 0},
-    {"Democracy", A::Democracy, 9, 0, 2, 0},
+    {"Anarchy", A::None, 0, 1, -1},
+    {"Despotism", A::None, 6, 1, -1},
+    {"Monarchy", A::Monarchy, 7, 1, 3},
+    {"Communism", A::Communism, 8, 1, 3},
+    {"Republic", A::Republic, 8, 2, 0},
+    {"Democracy", A::Democracy, 9, 2, 0},
 };
 } // namespace
 
 const TerrainInfo &terrain_info(Terrain t) { return kTerrain[static_cast<int>(t)]; }
+
+// Sources: the city routine of DOS Civilization 475.05 as rewritten from its
+// disassembly by the OpenCivOne project (codeberg.org/rhorvat/OpenCivOne,
+// CityWorker.cs: "trade * distance * 3 / (government * 20 + 80)", Communism
+// distance 10, Courthouse halves, Democracy zero; MapManagement distance),
+// which matches the formula in the CivFanatics Civ1 FAQ (section D, tip 17)
+// except for the per-government divisors: the FAQ's 8/12/16/20/24 list
+// Despotism and Anarchy the other way round and step by 4, where the game
+// itself uses 80/100/120/140/160 for Anarchy/Despotism/Monarchy/Communism/
+// Republic.
+int dos_corruption(int trade, int distance, Government g, bool courthouse)
+{
+    if (g == Government::Democracy || trade <= 0) return 0;
+    int c = trade * distance * 3 / (static_cast<int>(g) * 20 + 80);
+    if (courthouse) c /= 2;
+    return c;
+}
 const AdvanceInfo &advance_info(Advance a) { return kAdvances[static_cast<int>(a)]; }
 const UnitInfo &unit_info(UnitType u) { return kUnits[static_cast<int>(u)]; }
 const BuildingInfo &building_info(Building b) { return kBuildings[static_cast<int>(b)]; }

@@ -23,7 +23,7 @@ namespace civ {
 constexpr int kMaxCivs = 8;
 constexpr int kUnitHp = 10;   // hit points of a healthy unit; each lost combat round costs one
 
-enum class Order : std::uint8_t { None, Fortifying, Fortified, Sentry, Goto, Road, Irrigate, Mine, Fortress, Railroad, Clean };
+enum class Order : std::uint8_t { None, Fortifying, Fortified, Sentry, Goto, Road, Irrigate, Mine, Fortress, Railroad };
 
 struct Unit {
     int id = 0;
@@ -59,7 +59,7 @@ struct CityStats {
     int unhappy = 0;
     int food_box = 0;
     bool disorder = false;
-    int pollution = 0;      // percent chance a turn of polluting a square
+    int palace_distance = 0; // for corruption (DOS distance; 10 under Communism)
     int base_trade = 0;     // trade from the land, before trade routes
     int route_trade = 0;    // added by trade routes
 };
@@ -77,7 +77,13 @@ struct City {
     int build = static_cast<int>(UnitType::Militia);
     std::uint32_t buildings = 0;
     std::vector<std::pair<int, int>> worked; // offsets from the centre
+    // Specialists: citizens not working the land. As in the DOS game each
+    // makes 2 of something: an entertainer luxuries, a taxman gold, a
+    // scientist bulbs. Taxmen and scientists need a city of size 5 or more.
     int entertainers = 0;
+    int taxmen = 0;
+    int scientists = 0;
+    int specialists() const { return entertainers + taxmen + scientists; }
     bool manual = false;    // the player placed workers by hand
     int founded = 1;
     bool bought = false;
@@ -229,8 +235,10 @@ public:
     // -2 lost with its city.
     std::array<int, kWonderCount> wonder_city{};
     std::array<std::uint32_t, kMaxCivs> wonder_started{};  // announced "is building" bits
-    int warming = 0;           // global warming builds up while squares are polluted
-    int warming_events = 0;
+    // The DOS game's catch-up step in research cost (0..6), worked out
+    // every 50 turns once the calendar reaches AD: the most advances any
+    // civilization knows, less the turn / 9.
+    int tech_catchup = 0;
 
     Game() { wonder_city.fill(-1); }
 
@@ -248,13 +256,26 @@ public:
     bool enemy_at(int civ, int x, int y) const;      // a foreign unit or city
     int owner_at(int x, int y) const;                // -1 empty
     City *capital(int civ);
+    // Distance from this city to its owner's Palace as corruption counts it:
+    // 0 in the capital, kNoPalaceDistance at most (or with no Palace), and
+    // kCommunismDistance everywhere under Communism.
+    int palace_distance(const City &c) const;
 
     // --- knowledge
     bool has(int civ, Advance a) const { return a == Advance::None || civs[civ].techs[static_cast<int>(a)]; }
     int techs_known(int civ) const;
     bool can_research(int civ, Advance a) const;
     std::vector<Advance> researchable(int civ) const;
+    // Research cost as in DOS Civilization 475.05 (see README):
+    //   ratio = (human: 2 x level + 6, computer: 14 - level) + tech_catchup,
+    //           for a human at least 11 - advances known;
+    //   an advance is found when bulbs / m > advances known x ratio, with
+    //   m = 1 before 1 AD and 2 after; the bulbs then start again from 0.
+    // research_cost is the bulbs that takes: m x (known x ratio + 1), but
+    // never fewer than kMinResearchCost (the FAQ's "at least 10").
+    int research_ratio(int civ) const;
     int research_cost(int civ) const;
+    static constexpr int kMinResearchCost = 10;   // no advance costs fewer bulbs
     void learn(int civ, Advance a);
     bool can_build(const City &c, bool unit, int what) const;
     bool unit_available(int civ, UnitType u) const;
@@ -273,6 +294,9 @@ public:
     bool tile_free_for(const City &c, int x, int y) const;
     void update_city(City &c);            // recompute stats (and arrange workers unless manual)
     void arrange_workers(City &c);
+    // Everyone not on a worked square is a specialist: keep the taxmen and
+    // scientists that still fit (none below size 5), the rest entertain.
+    void settle_specialists(City &c) const;
     // Computer rulers get Civ-style handicaps: cheaper growth and builds on
     // harder levels, dearer on Chieftain (percent, 100 for humans).
     int ai_cost_percent(int civ) const;
@@ -312,6 +336,12 @@ public:
     bool buy(int city_id);
     void set_production(int city_id, bool unit, int what);
     void toggle_tile(int city_id, int dx, int dy);
+    // Clicking specialist `index` (entertainers first, then taxmen, then
+    // scientists) turns an entertainer into a taxman, a taxman into a
+    // scientist and a scientist back into an entertainer. False, and no
+    // change, in a city smaller than kSpecialistSize.
+    static constexpr int kSpecialistSize = 5;
+    bool cycle_specialist(int city_id, int index);
 
     // --- diplomats and caravans
     bool diplomat_can(int unit_id, int tx, int ty, DiploAction a) const;
@@ -340,12 +370,6 @@ public:
     bool launch(int civ);
     int arrival_year(int civ) const;                // -1 if not in flight
 
-    // --- pollution
-    int polluted_squares() const;
-    int pollution_chance(const City &c) const;     // percent per turn
-    int warming_risk() const;                       // percent: how close the next warming is
-    static constexpr int kWarmingThreshold = 600;
-
     // --- turn
     void begin_human_phase();             // goto orders, sentries waking
     void end_turn();                      // computer players, then a new turn
@@ -369,6 +393,8 @@ private:
     void kill_unit(int id);
     void kill_stack(int x, int y);
     void process_city(City &c, bool &learned_any);
+    void check_research(int civ);         // the advance under study is found
+    void update_tech_catchup();
     void start_turn_for(int civ);
     void new_turn();
     void reveal(int civ, int x, int y, int r);
@@ -383,11 +409,9 @@ private:
     void ai_diplomacy(int civ);
     bool ai_settler(Unit &u);
     void ai_envoy(Unit &u);    // Diplomats and Caravans
-    void pollute(City &c);
     void ai_barbarians(int civ);
     bool barbarian_landing(int bc, UnitType ship, const std::vector<UnitType> &army);
     bool barbarian_uprising(int bc, const std::vector<UnitType> &army);
-    void global_warming();
     void space_arrivals();
     void lose_spaceship(int civ, bool in_flight);
 };

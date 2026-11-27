@@ -26,7 +26,6 @@ struct Tile {
     bool mine = false;
     bool fortress = false;
     bool railroad = false;     // on a road: free movement, +50% shields
-    bool pollution = false;    // halves the square's yield until cleaned
     std::uint8_t explored = 0; // bit per civ
     std::uint8_t visible = 0;  // bit per civ, refreshed each turn
     std::uint8_t continent = 0;
@@ -53,6 +52,9 @@ struct Map {
         return d;
     }
     int distance(int x0, int y0, int x1, int y1) const;  // Chebyshev, with wrap
+    // The DOS game's distance for corruption: the longer of the two legs
+    // plus half the shorter (rounded down), with the east-west wrap.
+    int dos_distance(int x0, int y0, int x1, int y1) const;
     bool coastal(int x, int y) const;                    // land next to ocean
     bool next_to_land(int x, int y) const;
     void label_continents();

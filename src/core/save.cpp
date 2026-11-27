@@ -16,8 +16,60 @@ namespace civ {
 
 namespace {
 
-constexpr const char *kMagic = "LUNDUKECIV 2";      // written
-constexpr const char *kMagicOld = "LUNDUKECIV 1";   // still read: milestone 1 saves
+constexpr const char *kMagic = "LUNDUKECIV 4";      // written
+constexpr const char *kMagic3 = "LUNDUKECIV 3";     // still read: before Recycling was dropped
+constexpr const char *kMagic2 = "LUNDUKECIV 2";     // still read: milestone 2 saves
+constexpr const char *kMagic1 = "LUNDUKECIV 1";     // still read: milestone 1 saves
+
+// Saves before version 3 had pollution: Mass Transit (bit 17) and the
+// Recycling Center (bit 19) are gone, so the improvements after them move
+// down; polluted squares (tile bit 19), the "climate" line and the
+// clean-up order are simply dropped.
+constexpr int kOldMassTransit = 17;
+constexpr int kOldRecycling = 19;
+constexpr int kOldBuildingCount = 21;
+
+std::uint32_t buildings_from_v2(std::uint32_t old)
+{
+    std::uint32_t out = 0;
+    int to = 0;
+    for (int b = 0; b < kOldBuildingCount; ++b) {
+        if (b == kOldMassTransit || b == kOldRecycling) continue;
+        if ((old >> b) & 1u) out |= 1u << to;
+        ++to;
+    }
+    return out;
+}
+
+// An improvement index from a version 2 save; -1 for one that is gone.
+int building_from_v2(int old)
+{
+    if (old < 0 || old >= kOldBuildingCount) return old;   // wonders, spaceship parts
+    if (old == kOldMassTransit || old == kOldRecycling) return -1;
+    return old - (old > kOldMassTransit ? 1 : 0) - (old > kOldRecycling ? 1 : 0);
+}
+
+// Saves before version 4 still had the Recycling advance (index 53 between
+// Railroad and Refining): the advances after it move down one, and a
+// civilization that knew it simply forgets it.
+constexpr int kOldRecyclingAdvance = 53;
+constexpr int kOldAdvanceCount = 68;
+
+std::string techs_from_v3(const std::string &old)
+{
+    std::string out;
+    for (int i = 0; i < kOldAdvanceCount && i < static_cast<int>(old.size()); ++i)
+        if (i != kOldRecyclingAdvance) out += old[i];
+    return out;
+}
+
+// An advance index from a version 3 save: None for Recycling.
+int advance_from_v3(int old)
+{
+    if (old == kOldRecyclingAdvance) return static_cast<int>(Advance::None);
+    if (old > kOldRecyclingAdvance && old < kOldAdvanceCount) return old - 1;
+    return old;
+}
 
 std::string clean(const std::string &s)
 {
@@ -50,7 +102,7 @@ long long num(const std::vector<std::string> &f, size_t i)
 unsigned tile_word(const Tile &t)
 {
     return static_cast<unsigned>(t.terrain) | (t.special << 4) | (t.hut << 5) | (t.road << 6) | (t.irrigation << 7) |
-           (t.mine << 8) | (t.fortress << 9) | (static_cast<unsigned>(t.explored) << 10) | (t.railroad << 18) | (t.pollution << 19);
+           (t.mine << 8) | (t.fortress << 9) | (static_cast<unsigned>(t.explored) << 10) | (t.railroad << 18);
 }
 
 } // namespace
@@ -61,7 +113,7 @@ std::string save_game(const Game &g)
     o << kMagic << "\n";
     o << "game|" << g.turn << "|" << static_cast<int>(g.difficulty) << "|" << g.human << "|" << g.next_unit_id << "|"
       << g.next_city_id << "|" << g.winner << "|" << (g.human_dead ? 1 : 0) << "|" << (g.all_ai ? 1 : 0) << "|" << g.seed
-      << "|" << g.rng.state << "\n";
+      << "|" << g.rng.state << "|" << g.tech_catchup << "\n";
     o << "map|" << g.map.w << "|" << g.map.h << "\n";
     char buf[16];
     for (int y = 0; y < g.map.h; ++y) {
@@ -89,7 +141,7 @@ std::string save_game(const Game &g)
           << c.food << "|" << c.shields << "|" << c.build_unit << "|" << c.build << "|" << c.buildings << "|"
           << c.entertainers << "|" << c.manual << "|" << c.founded << "|" << c.bought << "|" << worked << "|";
         for (size_t r = 0; r < c.routes.size(); ++r) o << (r ? "," : "") << c.routes[r];
-        o << "|" << static_cast<int>(c.stolen) << "\n";
+        o << "|" << static_cast<int>(c.stolen) << "|" << c.taxmen << "|" << c.scientists << "\n";
     }
     for (const Unit &u : g.units) {
         o << "unit|" << u.id << "|" << static_cast<int>(u.type) << "|" << u.owner << "|" << u.x << "|" << u.y << "|"
@@ -102,7 +154,6 @@ std::string save_game(const Game &g)
     o << "wstart";
     for (std::uint32_t b : g.wonder_started) o << "|" << b;
     o << "\n";
-    o << "climate|" << g.warming << "|" << g.warming_events << "\n";
     o << "space|" << (g.space_win ? 1 : 0) << "\n";
     o << "end\n";
     return o.str();
@@ -116,7 +167,8 @@ bool load_game(const std::string &text, Game &out, std::string *error)
     };
     std::istringstream in(text);
     std::string line;
-    if (!std::getline(in, line) || (line != kMagic && line != kMagicOld)) return fail("Not a Lunduke Civ saved game.");
+    if (!std::getline(in, line) || (line != kMagic && line != kMagic3 && line != kMagic2 && line != kMagic1)) return fail("Not a Lunduke Civ saved game.");
+    const int version = line == kMagic ? 4 : line == kMagic3 ? 3 : (line == kMagic2 ? 2 : 1);
     Game g;
     bool ended = false;
     while (std::getline(in, line)) {
@@ -135,6 +187,7 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             g.seed = f.size() > 9 ? std::strtoull(f[9].c_str(), nullptr, 10) : 1;
             g.rng.state = f.size() > 10 ? std::strtoull(f[10].c_str(), nullptr, 10) : 1;
             if (g.rng.state == 0) g.rng.state = 1;
+            g.tech_catchup = std::clamp(static_cast<int>(num(f, 11)), 0, 6);
         } else if (k == "map") {
             if (num(f, 1) != kMapW || num(f, 2) != kMapH) return fail("Unsupported map size.");
             for (int y = 0; y < kMapH; ++y) {
@@ -153,7 +206,6 @@ bool load_game(const std::string &text, Game &out, std::string *error)
                     t.fortress = (v >> 9) & 1u;
                     t.explored = static_cast<std::uint8_t>((v >> 10) & 0xFFu);
                     t.railroad = (v >> 18) & 1u;
-                    t.pollution = (v >> 19) & 1u;
                 }
             }
             g.map.label_continents();
@@ -171,9 +223,16 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             c.govt = static_cast<Government>(num(f, 10));
             c.target = static_cast<Government>(num(f, 11));
             c.anarchy = static_cast<int>(num(f, 12));
-            const std::string techs = f.size() > 13 ? f[13] : "";
+            std::string techs = f.size() > 13 ? f[13] : "";
+            int research = static_cast<int>(num(f, 14));
+            if (version < 4) {
+                techs = techs_from_v3(techs);
+                research = advance_from_v3(research);
+            }
             for (int i = 0; i < kAdvanceCount && i < static_cast<int>(techs.size()); ++i) c.techs[i] = techs[i] == '1';
-            c.research = static_cast<Advance>(num(f, 14));
+            if (research < 0 || (research >= kAdvanceCount && research != static_cast<int>(Advance::None)))
+                research = static_cast<int>(Advance::None);
+            c.research = static_cast<Advance>(research);
             c.bulbs = static_cast<int>(num(f, 15));
             c.future = static_cast<int>(num(f, 16));
             c.name_next = static_cast<int>(num(f, 17));
@@ -202,6 +261,18 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             c.build_unit = num(f, 9) != 0;
             c.build = static_cast<int>(num(f, 10));
             c.buildings = static_cast<std::uint32_t>(num(f, 11));
+            if (version < 3) {
+                c.buildings = buildings_from_v2(c.buildings);
+                if (!c.build_unit) {
+                    c.build = building_from_v2(c.build);
+                    if (c.build < 0) {
+                        // Was building Mass Transit or a Recycling Center: the
+                        // shields go to a defender instead.
+                        c.build_unit = true;
+                        c.build = static_cast<int>(UnitType::Militia);
+                    }
+                }
+            }
             c.entertainers = static_cast<int>(num(f, 12));
             c.manual = num(f, 13) != 0;
             c.founded = static_cast<int>(num(f, 14));
@@ -221,6 +292,8 @@ bool load_game(const std::string &text, Game &out, std::string *error)
                 }
             }
             c.stolen = static_cast<std::uint8_t>(num(f, 18));
+            c.taxmen = std::max(0, static_cast<int>(num(f, 19)));
+            c.scientists = std::max(0, static_cast<int>(num(f, 20)));
             g.cities.push_back(c);
         } else if (k == "unit") {
             Unit u;
@@ -233,7 +306,8 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             u.y = static_cast<int>(num(f, 5));
             u.moves = static_cast<int>(num(f, 6));
             u.veteran = num(f, 7) != 0;
-            u.order = static_cast<Order>(num(f, 8));
+            const int order = static_cast<int>(num(f, 8));
+            u.order = order >= 0 && order <= static_cast<int>(Order::Railroad) ? static_cast<Order>(order) : Order::None;
             u.work = static_cast<int>(num(f, 9));
             u.home = static_cast<int>(num(f, 10));
             u.goto_x = static_cast<int>(num(f, 11));
@@ -248,8 +322,7 @@ bool load_game(const std::string &text, Game &out, std::string *error)
         } else if (k == "space") {
             g.space_win = num(f, 1) != 0;
         } else if (k == "climate") {
-            g.warming = static_cast<int>(num(f, 1));
-            g.warming_events = static_cast<int>(num(f, 2));
+            // Global warming from a version 2 save: no longer part of the game.
         } else if (k == "wstart") {
             for (int c = 0; c < kMaxCivs && c + 1 < static_cast<int>(f.size()); ++c) g.wonder_started[c] = static_cast<std::uint32_t>(num(f, c + 1));
         } else if (k == "end") {
