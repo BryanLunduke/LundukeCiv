@@ -1857,6 +1857,22 @@ MoveResult Game::move(int unit_id, int dx, int dy)
             u->carried_by = -1;
         }
     }
+    // A ship putting out from one of our cities takes the sentried land
+    // units there aboard, as many as it has room for (DOS).
+    if (i.domain == Domain::Sea && i.capacity > 0 && !(i.flags & kCarriesAir) && map.ocean(tx, ty)) {
+        const City *port = city_at(fx, fy);
+        if (port && port->owner == u->owner) {
+            int room = i.capacity - cargo_count(u->id);
+            for (Unit &c : units) {
+                if (room <= 0) break;
+                if (c.owner == u->owner && c.x == fx && c.y == fy && c.carried_by < 0 && c.order == Order::Sentry &&
+                    unit_info(c.type).domain == Domain::Land) {
+                    c.carried_by = u->id;
+                    --room;
+                }
+            }
+        }
+    }
     // Ships take their cargo along.
     if (i.domain == Domain::Sea) {
         for (Unit &c : units) {

@@ -547,12 +547,198 @@ static void test_ai_specialists()
     CHECK(h.entertainers > 0);
 }
 
+// --- Computer rulers at sea and in the air ---------------------------------
+
+// An ocean world with land rectangles in it (inclusive corners).
+static Game sea_game()
+{
+    Game g = flat_game(Terrain::Ocean);
+    return g;
+}
+
+static void island(Game &g, int x0, int y0, int x1, int y1)
+{
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x) g.map.at(x, y).terrain = Terrain::Grassland;
+    g.map.label_continents();
+}
+
+static void test_ship_boarding()
+{
+    // Units sentried in a port board a ship that sails out of it; others
+    // stay ashore.
+    Game g = sea_game();
+    island(g, 10, 10, 13, 13);
+    town(g, 0, 13, 12, 3, "Port");
+    const int s = place(g, 0, UnitType::Settlers, 13, 12);
+    const int l = place(g, 0, UnitType::Legion, 13, 12);
+    const int f = place(g, 0, UnitType::Phalanx, 13, 12);
+    g.unit(s)->order = Order::Sentry;
+    g.unit(l)->order = Order::Sentry;
+    g.unit(f)->order = Order::Fortified;
+    const int ship = place(g, 0, UnitType::Trireme, 13, 12);
+    CHECK(g.move(ship, 1, 0) == MoveResult::Moved);
+    CHECK_EQ(g.unit(s)->carried_by, ship);
+    CHECK_EQ(g.unit(l)->carried_by, ship);
+    CHECK_EQ(g.unit(f)->carried_by, -1);
+    CHECK_EQ(g.unit(s)->x, 14);
+    CHECK_EQ(g.unit(f)->x, 13);
+    // The computer's plans and the cargo survive a save.
+    g.unit(ship)->plan = kPlanFerry;
+    g.unit(s)->plan = kPlanPassenger;
+    Game h;
+    std::string err;
+    CHECK(load_game(save_game(g), h, &err));
+    CHECK_EQ(h.unit(ship)->plan, kPlanFerry);
+    CHECK_EQ(h.unit(s)->plan, kPlanPassenger);
+    CHECK_EQ(h.unit(s)->carried_by, ship);
+    CHECK_EQ(h.unit(f)->plan, kPlanNone);
+}
+
+static int cities_on(const Game &g, int owner, int cont)
+{
+    int n = 0;
+    for (const City &c : g.cities) n += c.owner == owner && g.map.at(c.x, c.y).continent == cont;
+    return n;
+}
+
+static void test_ai_overseas_settling()
+{
+    // A computer ruler whose island is full ships Settlers to free land.
+    Game g = sea_game();
+    island(g, 10, 20, 13, 23);   // home: no room for a second city
+    island(g, 20, 16, 28, 27);   // free land across the strait
+    island(g, 50, 40, 52, 42);   // the human player lives far away
+    town(g, 0, 51, 41, 3, "Faraway");
+    g.civs[1].ai = true;
+    town(g, 1, 10, 21, 4, "Crowded");
+    place(g, 1, UnitType::Phalanx, 10, 21);
+    place(g, 1, UnitType::Settlers, 10, 21);
+    place(g, 1, UnitType::Sail, 10, 21);
+    const int there = g.map.at(24, 22).continent;
+    bool waited = false;
+    for (int t = 0; t < 12 && cities_on(g, 1, there) == 0; ++t) {
+        g.end_turn();
+        waited |= g.ai_passengers(1) > 0;
+        for (const Unit &u : g.units) waited |= u.owner == 1 && u.carried_by >= 0;
+    }
+    CHECK(waited);
+    CHECK_EQ(cities_on(g, 1, there), 1);
+}
+
+static void test_ai_invasion()
+{
+    // At war with a ruler overseas only: attackers gather in port, a ship
+    // carries them over and they go ashore next to the enemy city.
+    Game g = sea_game();
+    island(g, 10, 20, 13, 23);
+    island(g, 20, 18, 26, 25);
+    g.civs[1].ai = true;
+    town(g, 1, 13, 21, 4, "Home");
+    for (int i = 0; i < 2; ++i) g.unit(place(g, 1, UnitType::Phalanx, 13, 21))->order = Order::Fortified;
+    for (int i = 0; i < 3; ++i) place(g, 1, UnitType::Catapult, 13, 21);
+    place(g, 1, UnitType::Sail, 13, 21);
+    town(g, 0, 23, 21, 2, "Target");
+    place(g, 0, UnitType::Militia, 23, 21);
+    g.declare_war(1, 0);
+    const int there = g.map.at(23, 21).continent;
+    bool landed = false, sailed = false;
+    for (int t = 0; t < 15 && !landed; ++t) {
+        g.end_turn();
+        for (const Unit &u : g.units) {
+            sailed |= u.owner == 1 && u.carried_by >= 0;
+            landed |= u.owner == 1 && u.carried_by < 0 && unit_info(u.type).domain == Domain::Land && g.map.land(u.x, u.y) &&
+                      g.map.at(u.x, u.y).continent == there;
+        }
+        landed |= g.city_at(23, 21) == nullptr || g.city_at(23, 21)->owner == 1;
+    }
+    CHECK(sailed);
+    CHECK(landed);
+}
+
+static void test_ai_naval_attack()
+{
+    // A warship sinks the enemy ship next to it it can beat.
+    Game g = sea_game();
+    island(g, 10, 10, 12, 12);
+    g.civs[1].ai = true;
+    town(g, 1, 12, 11, 3, "Base");
+    place(g, 1, UnitType::Phalanx, 12, 11);
+    const int iron = place(g, 1, UnitType::Ironclad, 13, 11);
+    const int prey = place(g, 0, UnitType::Trireme, 14, 11);
+    g.declare_war(1, 0);
+    g.ai_play(1);
+    CHECK(g.unit(prey) == nullptr);
+    CHECK(g.unit(iron) != nullptr);
+    // At peace it keeps to port.
+    Game p = sea_game();
+    island(p, 10, 10, 12, 12);
+    p.civs[1].ai = true;
+    town(p, 1, 12, 11, 3, "Base");
+    const int calm = place(p, 1, UnitType::Ironclad, 15, 11);
+    const int other = place(p, 0, UnitType::Trireme, 16, 11);
+    p.ai_play(1);
+    CHECK(p.unit(other) != nullptr);
+    CHECK_EQ(p.unit(calm)->x, 12);
+    CHECK_EQ(p.unit(calm)->y, 11);
+}
+
+static void test_ai_air_strike()
+{
+    // A Fighter strikes an enemy within there-and-back range and lands
+    // home the same turn; out of range it stays put.
+    Game g = flat_game();
+    g.civs[1].ai = true;
+    town(g, 1, 20, 20, 5, "Airfield");
+    g.unit(place(g, 1, UnitType::Phalanx, 20, 20))->order = Order::Fortified;
+    g.unit(place(g, 1, UnitType::Phalanx, 20, 20))->order = Order::Fortified;
+    const int fighter = place(g, 1, UnitType::Fighter, 20, 20);
+    const int prey = place(g, 0, UnitType::Settlers, 24, 20);
+    const int too_far = place(g, 0, UnitType::Settlers, 40, 20);
+    g.declare_war(1, 0);
+    g.ai_play(1);
+    CHECK(g.unit(prey) == nullptr);
+    CHECK(g.unit(too_far) != nullptr);
+    const Unit *f = g.unit(fighter);
+    CHECK(f != nullptr);
+    if (f) {
+        CHECK_EQ(f->x, 20);
+        CHECK_EQ(f->y, 20);
+    }
+}
+
+static void test_ai_navy_build()
+{
+    // Passengers waiting in a port: the city builds the roomiest ship it
+    // can. At war, coastal cities add warships; Flight brings aircraft.
+    Game g = sea_game();
+    island(g, 10, 10, 14, 14);
+    g.civs[1].ai = true;
+    City &c = town(g, 1, 14, 12, 6, "Harbour");
+    g.learn(1, Advance::MapMaking);
+    g.learn(1, Advance::Navigation);
+    CHECK_EQ(g.ai_navy_build(c), -1);
+    const int s = place(g, 1, UnitType::Settlers, 14, 12);
+    g.unit(s)->plan = kPlanPassenger;
+    g.unit(s)->order = Order::Sentry;
+    CHECK_EQ(g.ai_navy_build(c), static_cast<int>(UnitType::Sail));
+    g.unit(s)->plan = kPlanNone;
+    g.declare_war(1, 0);
+    g.learn(1, Advance::Magnetism);
+    CHECK_EQ(g.ai_navy_build(c), static_cast<int>(UnitType::Frigate));
+    for (int i = 0; i < 3; ++i) place(g, 1, UnitType::Frigate, 14, 12);
+    g.learn(1, Advance::Flight);
+    CHECK_EQ(g.ai_navy_build(c), static_cast<int>(UnitType::Fighter));
+}
+
 int main(int argc, char **argv)
 {
     const std::map<std::string, std::function<void()>> tests = {
         {"score", test_score}, {"end_2100", test_end_2100}, {"hall_of_fame", test_hall_of_fame}, {"save_v6", test_save_v6},
         {"huts", test_huts}, {"diplomats", test_diplomats}, {"science_carryover", test_science_carryover},
-        {"ai_specialists", test_ai_specialists},
+        {"ai_specialists", test_ai_specialists}, {"ship_boarding", test_ship_boarding},
+        {"ai_overseas_settling", test_ai_overseas_settling}, {"ai_invasion", test_ai_invasion},
+        {"ai_naval_attack", test_ai_naval_attack}, {"ai_air_strike", test_ai_air_strike}, {"ai_navy_build", test_ai_navy_build},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();

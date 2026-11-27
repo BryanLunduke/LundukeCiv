@@ -43,6 +43,18 @@ const int kCrossAi[20][2] = {
 void Game::choose_research_ai(int ci)
 {
     Civ &c = civs[ci];
+    // Boxed in on our landmass: ships first, to settle overseas - Map
+    // Making, then the road to Navigation for ships that cross the ocean.
+    if (!has(ci, Advance::Navigation) && ai_boxed_in(ci)) {
+        const Advance sea_path[] = {Advance::MapMaking, Advance::Navigation, Advance::Astronomy, Advance::Mathematics,
+                                    Advance::Mysticism, Advance::Alphabet, Advance::Masonry, Advance::CeremonialBurial};
+        for (Advance a : sea_path) {
+            if (can_research(ci, a)) {
+                c.research = a;
+                return;
+            }
+        }
+    }
     for (Advance a : kResearchOrder) {
         if (can_research(ci, a)) {
             c.research = a;
@@ -152,6 +164,15 @@ void Game::ai_city(City &c)
     if (war_here && own_attackers < own_cities / 2 + 1 && rng.chance(0.5)) {
         pick(true, best_unit(true));
         return;
+    }
+    // 3b. Ships for passengers waiting in port, warships and aircraft in
+    // wartime, one ship to look around once the homeland is full.
+    {
+        const int naval = ai_navy_build(c);
+        if (naval >= 0 && (ai_passengers(ci) > 0 || rng.chance(0.35))) {
+            pick(true, naval);
+            return;
+        }
     }
     // 4. Improvements, most useful first for this city.
     const int corruption = st.corruption;
@@ -301,6 +322,21 @@ bool Game::ai_settler(Unit &u)
     const int ci = u.owner;
     const int id = u.id;
     if (u.order == Order::Road || u.order == Order::Irrigate || u.order == Order::Mine) return true;
+    if (u.carried_by >= 0) {
+        if (u.order != Order::Sentry) ai_disembark(id);
+        return true;
+    }
+    if (u.plan == kPlanPassenger) {
+        const City *port = city_at(u.x, u.y);
+        int sx = -1, sy = -1;
+        if (port && port->owner == ci && ++u.work <= 20 && ai_overseas_site(ci, u.x, u.y, sx, sy)) {
+            u.order = Order::Sentry;
+            return true;
+        }
+        u.plan = kPlanNone;
+        u.work = 0;
+        u.order = Order::None;
+    }
     int own_cities = 0;
     for (const City &c : cities) own_cities += c.owner == ci;
     int improving = 0;
@@ -383,6 +419,12 @@ bool Game::ai_settler(Unit &u)
             Unit *p = unit(id);
             if (p && p->x == bx && p->y == by && site_ok(bx, by)) found_city(id);
             return true;
+        }
+        // No room left on this landmass: a site we know of overseas, if
+        // we have (or can build) a ship and not too many already wait.
+        int sx = -1, sy = -1;
+        if (own_cities >= 1 && ai_has_ferry(ci) && ai_passengers(ci) < 2 && ai_overseas_site(ci, u.x, u.y, sx, sy)) {
+            if (ai_seek_ship(id)) return true;
         }
     }
     // Improve land: the job that adds the most to a square one of our
@@ -558,6 +600,11 @@ void Game::ai_unit(Unit &start)
     const int id = start.id;
     const int ci = start.owner;
     const UnitInfo &info = unit_info(start.type);
+    if (start.carried_by >= 0 && info.domain == Domain::Land) {
+        // Aboard: wait while the ship sails; step ashore once woken.
+        if (start.order != Order::Sentry) ai_disembark(id);
+        return;
+    }
     if (info.flags & kSettlers) {
         ai_settler(start);
         return;
@@ -566,8 +613,15 @@ void Game::ai_unit(Unit &start)
         ai_envoy(start);
         return;
     }
-    if (info.domain != Domain::Land || !is_military(start.type)) {
-        // Ships and aircraft wait at home for now.
+    if (info.domain == Domain::Sea) {
+        ai_ship(id);
+        return;
+    }
+    if (info.domain == Domain::Air) {
+        ai_air(id);
+        return;
+    }
+    if (!is_military(start.type)) {
         Unit *u = unit(id);
         if (u && u->order == Order::None) u->order = Order::Sentry;
         return;
@@ -589,6 +643,22 @@ void Game::ai_unit(Unit &start)
         }
         return ((civs[ci].war || c.size >= 5) ? 2 : 1) - n;
     };
+    {
+        // Waiting in port for a ship (a few turns at most), unless the city
+        // itself needs the guard.
+        Unit *u = unit(id);
+        if (!u) return;
+        if (u->plan == kPlanPassenger) {
+            const City *c = city_at(u->x, u->y);
+            if (c && c->owner == ci && garrison_need(*c) <= 0 && ++u->work <= 20 && ai_overseas_enemy(ci, u->x, u->y)) {
+                u->order = Order::Sentry;
+                return;
+            }
+            u->plan = kPlanNone;
+            u->work = 0;
+            u->order = Order::None;
+        }
+    }
     {
         Unit *u = unit(id);
         if (!u) return;
@@ -670,6 +740,11 @@ void Game::ai_unit(Unit &start)
             const MoveResult r = move(id, sx, sy);
             if (r == MoveResult::Blocked || r == MoveResult::Zoc || r == MoveResult::NeedWar) break;
             continue;
+        }
+        // At war with nobody on this landmass but someone overseas: off to
+        // a port to wait for a ship.
+        if (info.attack > info.defense && ai_overseas_enemy(ci, u->x, u->y) && ai_has_ferry(ci) && ai_passengers(ci) < 6) {
+            if (ai_seek_ship(id)) return;
         }
         // Explore: walk to the nearest land square next to the unknown.
         {

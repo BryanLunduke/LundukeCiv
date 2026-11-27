@@ -170,7 +170,8 @@ std::string save_game(const Game &g)
     for (const Unit &u : g.units) {
         o << "unit|" << u.id << "|" << static_cast<int>(u.type) << "|" << u.owner << "|" << u.x << "|" << u.y << "|"
           << u.moves << "|" << u.veteran << "|" << static_cast<int>(u.order) << "|" << u.work << "|" << u.home << "|"
-          << u.goto_x << "|" << u.goto_y << "|" << u.fuel << "|" << u.carried_by << "|" << u.done << "|" << u.hp << "\n";
+          << u.goto_x << "|" << u.goto_y << "|" << u.fuel << "|" << u.carried_by << "|" << u.done << "|" << u.hp << "|"
+          << static_cast<int>(u.plan) << "\n";
     }
     o << "wonders";
     for (int w = 0; w < kWonderCount; ++w) o << "|" << g.wonder_city[w];
@@ -350,6 +351,7 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             u.carried_by = static_cast<int>(num(f, 14));
             u.done = num(f, 15) != 0;
             u.hp = f.size() > 16 ? std::clamp(static_cast<int>(num(f, 16)), 1, kUnitHp) : kUnitHp;
+            u.plan = static_cast<std::uint8_t>(std::clamp(static_cast<int>(num(f, 17)), 0, 2));   // version 6
             g.units.push_back(u);
         } else if (k == "civ5") {
             const int i = static_cast<int>(num(f, 1));

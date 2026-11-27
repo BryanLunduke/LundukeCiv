@@ -44,6 +44,15 @@ struct Unit {
     int carried_by = -1;    // ship id when aboard
     bool done = false;      // skipped for this turn
     int hp = kUnitHp;       // damage from combat heals over a few turns
+    // Computer rulers: what the unit is about (AiPlan). A ship keeps its
+    // destination in goto_x, goto_y.
+    std::uint8_t plan = 0;
+};
+
+enum AiPlan : std::uint8_t {
+    kPlanNone = 0,
+    kPlanPassenger = 1,   // waits, sentried in a port, for a ship overseas
+    kPlanFerry = 2,       // a ship carrying passengers to goto_x, goto_y
 };
 
 struct CityStats {
@@ -569,6 +578,14 @@ public:
 
     // --- AI
     void ai_play(int civ);
+    // Computer rulers overseas (ai_navy.cpp): passengers waiting for a ship
+    // (at x, y, or anywhere with x < 0), a free site on another landmass,
+    // and the ship or aircraft a city should build (-1 none).
+    int ai_passengers(int civ, int x = -1, int y = -1) const;
+    bool ai_overseas_site(int civ, int fx, int fy, int &sx, int &sy) const;
+    int ai_navy_build(const City &c) const;
+    // No free city site left on any landmass where the civ has a city.
+    bool ai_boxed_in(int civ) const;
 
     void say(int civ, MsgKind kind, const std::string &text, int x = -1, int y = -1);
     std::string city_display_name(int id) const;
@@ -607,6 +624,17 @@ private:
     void ceasefires_end();
     bool ai_settler(Unit &u);
     void ai_envoy(Unit &u);    // Diplomats and Caravans
+    // --- the computer rulers at sea and in the air (ai_navy.cpp)
+    void ai_ship(int unit_id);
+    void ai_ferry(int unit_id);
+    void ai_sail_home(int unit_id);
+    void ai_explore_sea(int unit_id);
+    void ai_air(int unit_id);
+    void ai_disembark(int unit_id);
+    bool ai_seek_ship(int unit_id);
+    bool ai_landing(const Unit &ship, int tx, int ty, int &ox, int &oy) const;
+    const City *ai_overseas_enemy(int ci, int fx, int fy) const;
+    bool ai_has_ferry(int ci) const;
     void ai_barbarians(int civ);
     bool barbarian_landing(int bc, UnitType ship, const std::vector<UnitType> &army);
     bool barbarian_uprising(int bc, const std::vector<UnitType> &army);
