@@ -9,7 +9,9 @@
 // window code hands it input events and a Cairo surface to draw on.
 
 #include "draw.hpp"
+#include "fame.hpp"
 #include "game.hpp"
+#include "options.hpp"
 #include "pad_nav.hpp"
 #include "terrain_paint.hpp"
 
@@ -60,6 +62,12 @@ enum class DialogKind {
     Databank,      // other: topic, scroll: entry, dx: list offset
     CustomWorld,   // land, temperature, climate, age
     Nuke,          // the blast, lines: what it did
+    Retire,        // are you sure?
+    Score,         // the Civilization Score; saving: the reign has ended (Hall of Fame next)
+    HallOfFame,    // scroll: the place just earned (-1 none); saving: the reign has ended
+    FindCity,      // field: the name typed, scroll: the row chosen
+    Options,       // Game Options
+    Event,         // other: EventKind, scroll: arg, city_id, field: city name, dx: the other civ
 };
 
 struct Dialog {
@@ -93,7 +101,8 @@ public:
 
     void open_new_game_dialog();
     bool load_file(const std::string &path, std::string *error = nullptr);
-    void set_save_dir(const std::string &dir) { save_dir_ = dir; }
+    // The data folder: saves, autosave, Game Options and the Hall of Fame.
+    void set_save_dir(const std::string &dir);
 
     // Input. Return true when the screen needs a redraw.
     bool key(const KeyEvent &k);
@@ -138,6 +147,24 @@ private:
     std::string save_dir_;
     Geometry geo_;
     bool end_of_turn_prompt_ = false;
+    civ::GameOptions options_;
+    std::vector<civ::FameEntry> fame_;
+    bool auto_end_ = false;   // End of Turn off: end the turn on the next tick
+    // Enemy Moves: where enemy units went in sight between our turns.
+    struct Trail {
+        int from_x, from_y, x, y, owner;
+    };
+    std::vector<Trail> trails_;
+    std::string options_path() const { return save_dir_ + "options.txt"; }
+    std::string fame_path() const { return save_dir_ + "halloffame.txt"; }
+    std::string autosave_path() const { return save_dir_ + "autosave.lciv"; }
+    void save_options_file();
+    void save_fame_file();
+    int record_fame();          // the reign's entry into the Hall of Fame (once); its place or -1
+    void end_of_reign();        // 2100 AD or retirement: the score, then the Hall of Fame
+    void show_events();         // event screens for g().events
+    void instant_advice();
+    void autosave();
 
     // Gamepad state.
     pad::Glyphs glyphs_;
@@ -242,6 +269,13 @@ private:
     void draw_databank(cairo_t *cr, Dialog &d);
     void draw_custom_world(cairo_t *cr, Dialog &d);
     void draw_nuke(cairo_t *cr, Dialog &d);
+    void draw_retire(cairo_t *cr, Dialog &d);
+    void draw_score(cairo_t *cr, Dialog &d);
+    void draw_hall_of_fame(cairo_t *cr, Dialog &d);
+    void draw_find_city(cairo_t *cr, Dialog &d);
+    void draw_options(cairo_t *cr, Dialog &d);
+    void draw_event(cairo_t *cr, Dialog &d);
+    void find_city_go(int city_id);
     void open_talks();                       // one dialog for each audience waiting
     void answer_talk(bool accept);
     void audience(int civ, civ::Proposal p);

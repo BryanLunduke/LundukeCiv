@@ -44,6 +44,15 @@ struct Unit {
     int carried_by = -1;    // ship id when aboard
     bool done = false;      // skipped for this turn
     int hp = kUnitHp;       // damage from combat heals over a few turns
+    // Computer rulers: what the unit is about (AiPlan). A ship keeps its
+    // destination in goto_x, goto_y.
+    std::uint8_t plan = 0;
+};
+
+enum AiPlan : std::uint8_t {
+    kPlanNone = 0,
+    kPlanPassenger = 1,   // waits, sentried in a port, for a ship overseas
+    kPlanFerry = 2,       // a ship carrying passengers to goto_x, goto_y
 };
 
 struct CityStats {
@@ -167,6 +176,24 @@ struct Message {
     int turn = 0;
 };
 
+// Moments the human player sees a full screen for (event screens). The
+// window code takes them from Game::events and clears the list; they are
+// not saved.
+enum class EventKind : std::uint8_t {
+    Advance,      // arg: the advance learned
+    Government,   // arg: the new government
+    CityTaken,    // city: the city's id, arg: the old owner (civ is the new one)
+    CityLost,     // city: the city's id, arg: the new owner
+};
+
+struct GameEvent {
+    EventKind kind = EventKind::Advance;
+    int civ = -1;       // whose event
+    int arg = -1;
+    int city = -1;
+    std::string name;   // the city's name (it may be gone by the time it shows)
+};
+
 struct CombatResult {
     bool happened = false;
     UnitType att_type = UnitType::Militia;
@@ -199,7 +226,14 @@ enum class MoveResult : std::uint8_t {
     Caravan,    // a Caravan reached a city: help a wonder or open a trade route
 };
 
-enum class DiploAction : std::uint8_t { Embassy, Investigate, StealTech, Sabotage, Incite, Bribe, Count };
+// What a village of a minor tribe holds (DOS).
+enum class HutOutcome : std::uint8_t { Gold, Advance, Mercenaries, Barbarians, FreeCity };
+
+// What a Diplomat may do. As in DOS, a Diplomat is spent on every action
+// in a city -- except Meet with King, which only ends its turn, and an
+// attempt that comes to nothing (no advance to steal). Bribing a unit
+// leaves the Diplomat in the field.
+enum class DiploAction : std::uint8_t { Embassy, Investigate, StealTech, Sabotage, Incite, MeetKing, Bribe, Count };
 const char *diplo_action_name(DiploAction a);
 constexpr int kMaxRoutes = 3;
 
@@ -269,6 +303,24 @@ struct Attitude {
     int tribute = 0;       // gold it would ask, in 50s
 };
 
+// The Civilization Score (DOS): every citizen counts, twice when happy and
+// not at all when unhappy (worked out as if luxuries were at 40%); 20 for
+// each Wonder of the World; 3 for each turn of world peace in AD, at most
+// 100; 5 for each Future Technology; and the colonists' share when the
+// spaceship lands. A conquest scores at least the conqueror's bonus.
+struct ScoreBreakdown {
+    int citizens = 0;       // size + happy - unhappy, summed over the cities
+    int happy = 0, content = 0, unhappy = 0, specialists = 0;
+    int wonders = 0;        // how many
+    int wonder_points = 0;  // 20 each
+    int peace = 0;
+    int future = 0;
+    int spaceship = 0;      // points the colonists bring (0 unless landed)
+    int spaceship_possible = 0;  // what a ship in flight would bring
+    int bonus = -1;         // conquest bonus, -1 none
+    int total = 0;
+};
+
 // A proposal the player makes in Foreign Affairs.
 enum class Proposal : std::uint8_t { Ceasefire, Peace, Embassy, CancelTreaty };
 
@@ -285,6 +337,7 @@ public:
     int next_unit_id = 1;
     int next_city_id = 1;
     std::vector<Message> messages;
+    std::vector<GameEvent> events;   // for the human player only; see EventKind
     CombatResult last_combat;
     int winner = -1;           // civ that won by conquest or by reaching Alpha Centauri
     int civil_wars = 0;
@@ -300,6 +353,14 @@ public:
     // every 50 turns once the calendar reaches AD: the most advances any
     // civilization knows, less the turn / 9.
     int tech_catchup = 0;
+    // --- the end of the game (DOS)
+    // Turns (the human's, in AD) since two peoples last fought: world peace
+    // for the Civilization Score.
+    int peace_turns = 0;
+    bool game_ended = false;   // 2100 AD came or the ruler retired: the score is final
+    bool retired = false;
+    int end_turn_number = 0;   // the turn the game ended on (0 not yet)
+    int opponents = 0;         // computer rivals at the start, for the conquest bonus
 
     Game() { wonder_city.fill(-1); }
 
@@ -338,6 +399,13 @@ public:
     int research_cost(int civ) const;
     static constexpr int kMinResearchCost = 10;   // no advance costs fewer bulbs
     void learn(int civ, Advance a);
+    // The DOS game asks what to study only when an advance is found: once
+    // bulbs are gathered toward one, the choice stands until it is found.
+    // Surplus bulbs are lost when an advance is found (research starts
+    // again from 0), and a human ruler loses the bulbs toward an advance
+    // that arrives some other way (learn).
+    bool can_change_research(int civ) const;
+    bool set_research(int civ, Advance a);   // false: not open to them, or the choice already stands
     bool can_build(const City &c, bool unit, int what) const;
     bool unit_available(int civ, UnitType u) const;
 
@@ -416,6 +484,21 @@ public:
     bool senate(int civ) const;
     bool senate_blocks(int a, int b) const { return senate(a) && has_treaty(a, b); }
 
+    // --- the Civilization Score, the end in 2100 AD and retirement
+    static constexpr int kEndYear = 2100;          // DOS: 2100 less 20 a level; here 2100 on every level
+    static constexpr int kRetireWarningYears = 20; // "plans retirement in 20 years"
+    static constexpr int kWonderPoints = 20;
+    static constexpr int kFuturePoints = 5;
+    static constexpr int kPeacePerTurn = 3;
+    static constexpr int kPeaceMax = 100;
+    ScoreBreakdown score(int civ);                 // works the cities out at 40% luxuries, then puts them back
+    long long population(int civ) const;          // as the DOS game counts people
+    void retire();                                 // the ruler steps down: the game ends now
+    // No more turns: retired, conquered, destroyed or flown to the stars.
+    // After 2100 AD the ruler may keep playing; the Hall of Fame keeps the
+    // score the game ended with.
+    bool over() const { return retired || winner >= 0 || human_dead; }
+
     // --- diplomacy (DOS MeetWithKing, approximated: see README)
     Attitude attitude(int ai, int other) const;
     int civ_score(int civ) const;          // DOS ranking points
@@ -472,10 +555,16 @@ public:
 
     // --- diplomats and caravans
     bool diplomat_can(int unit_id, int tx, int ty, DiploAction a) const;
-    bool diplomat_hostile(DiploAction a) const { return a != DiploAction::Embassy && a != DiploAction::Investigate; }
+    bool diplomat_hostile(DiploAction a) const
+    {
+        return a != DiploAction::Embassy && a != DiploAction::Investigate && a != DiploAction::MeetKing;
+    }
+    static bool diplomat_spent(DiploAction a) { return a != DiploAction::MeetKing && a != DiploAction::Bribe; }
     int incite_cost(const City &c, int civ) const;   // gold, -1 if it cannot be incited
     int bribe_cost(const Unit &u, int civ) const;
-    // Carries out the action; the Diplomat is spent. Returns what happened.
+    // Carries out the action (see DiploAction for when the Diplomat is
+    // spent). Returns what happened. Meet with King returns an empty string:
+    // the audience itself is the window code's (Proposal, propose).
     std::string diplomat_act(int unit_id, int tx, int ty, DiploAction a);
     bool caravan_can_help(const Unit &u, const City &c) const;
     bool caravan_can_trade(const Unit &u, const City &c) const;
@@ -489,6 +578,8 @@ public:
     bool is_barbarian(int civ) const { return civ >= 0 && civ < static_cast<int>(civs.size()) && civs[civ].barbarian; }
     void spawn_barbarians(bool force_sea = false, bool force_land = false);
     int ransom(int unit_id, int tx, int ty);        // capture lone barbarian leaders: gold won
+    // --- villages: what roll (0..3) gives for a unit of `owner` at x, y
+    HutOutcome hut_outcome(int owner, int x, int y, int roll) const;
 
     // --- space race
     bool space_open() const;                        // the Apollo Program stands somewhere
@@ -506,6 +597,14 @@ public:
 
     // --- AI
     void ai_play(int civ);
+    // Computer rulers overseas (ai_navy.cpp): passengers waiting for a ship
+    // (at x, y, or anywhere with x < 0), a free site on another landmass,
+    // and the ship or aircraft a city should build (-1 none).
+    int ai_passengers(int civ, int x = -1, int y = -1) const;
+    bool ai_overseas_site(int civ, int fx, int fy, int &sx, int &sy) const;
+    int ai_navy_build(const City &c) const;
+    // No free city site left on any landmass where the civ has a city.
+    bool ai_boxed_in(int civ) const;
 
     void say(int civ, MsgKind kind, const std::string &text, int x = -1, int y = -1);
     std::string city_display_name(int id) const;
@@ -520,12 +619,15 @@ private:
     void kill_unit(int id);
     void kill_stack(int x, int y);
     void process_city(City &c, bool &learned_any);
+    void compute_city_stats(City &c);    // c.stats from its workers and specialists as they are
+    void ai_specialists(City &c);
     void check_research(int civ);         // the advance under study is found
     void update_tech_catchup();
     void start_turn_for(int civ);
     void new_turn();
     void reveal(int civ, int x, int y, int r);
-    void enter_hut(Unit &u);
+    void enter_hut(int unit_id);
+    int make_city(int owner, int x, int y);   // a city with no Settlers (a hut's advanced tribe); its id
     void capture_city(City &c, int new_owner);
     std::string next_city_name(int civ);
     void set_tribe(int civ, int tribe);   // name, leader, colour and cities of a Civ 1 people
@@ -541,6 +643,17 @@ private:
     void ceasefires_end();
     bool ai_settler(Unit &u);
     void ai_envoy(Unit &u);    // Diplomats and Caravans
+    // --- the computer rulers at sea and in the air (ai_navy.cpp)
+    void ai_ship(int unit_id);
+    void ai_ferry(int unit_id);
+    void ai_sail_home(int unit_id);
+    void ai_explore_sea(int unit_id);
+    void ai_air(int unit_id);
+    void ai_disembark(int unit_id);
+    bool ai_seek_ship(int unit_id);
+    bool ai_landing(const Unit &ship, int tx, int ty, int &ox, int &oy) const;
+    const City *ai_overseas_enemy(int ci, int fx, int fy) const;
+    bool ai_has_ferry(int ci) const;
     void ai_barbarians(int civ);
     bool barbarian_landing(int bc, UnitType ship, const std::vector<UnitType> &army);
     bool barbarian_uprising(int bc, const std::vector<UnitType> &army);

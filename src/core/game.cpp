@@ -139,6 +139,8 @@ Game Game::create(const GameSettings &s)
         b.gold = 0;
         g.civs.push_back(b);   // at_war() is always true against them
     }
+    for (const Civ &c : g.civs) g.opponents += c.ai && !c.barbarian;
+    if (s.all_ai) g.opponents = std::max(0, g.opponents - 1);
     g.refresh_visibility();
     g.say(0, MsgKind::Info, "Your people, the " + g.civs[0].name + ", await your command, " + g.civs[0].leader + ".");
     return g;
@@ -497,6 +499,13 @@ void Game::update_tech_catchup()
 
 void Game::learn(int civ, Advance a)
 {
+    if (civ == human && !civs[civ].ai && a != Advance::None) {
+        GameEvent e;
+        e.kind = EventKind::Advance;
+        e.civ = civ;
+        e.arg = static_cast<int>(a);
+        events.push_back(e);
+    }
     if (a == Advance::FutureTech) {
         civs[civ].future++;
     } else {
@@ -516,7 +525,28 @@ void Game::learn(int civ, Advance a)
     }
     if (civs[civ].research == a) {
         civs[civ].research = Advance::None;
+        // DOS: a human ruler whose wise men were studying an advance that
+        // came some other way (a village, a Diplomat, a treaty, a conquest,
+        // the Great Library) loses the bulbs gathered toward it. Computer
+        // rulers keep theirs.
+        if (!civs[civ].ai) civs[civ].bulbs = 0;
     }
+}
+
+bool Game::can_change_research(int civ) const
+{
+    const Civ &c = civs[civ];
+    return c.research == Advance::None || c.bulbs == 0;
+}
+
+bool Game::set_research(int civ, Advance a)
+{
+    if (!can_research(civ, a)) return false;
+    Civ &c = civs[civ];
+    if (c.research == a) return true;
+    if (!can_change_research(civ)) return false;
+    c.research = a;
+    return true;
 }
 
 bool Game::unit_available(int civ, UnitType u) const
@@ -656,6 +686,200 @@ void Game::settle_specialists(City &c) const
     c.entertainers = total - c.taxmen - c.scientists;
 }
 
+void Game::compute_city_stats(City &c)
+{
+    const Civ &civ = civs[c.owner];
+    CityStats s;
+    const bool colossus = wonder_in(c, Wonder::Colossus);
+    Yield raw = tile_yield(c.x, c.y, c.owner, true, c.celebrating);
+    if (colossus && raw.trade > 0) raw.trade++;
+    for (const auto &w : c.worked) {
+        const Yield y = tile_yield(c.x + w.first, c.y + w.second, c.owner, false, c.celebrating);
+        raw.food += y.food;
+        raw.shields += y.shields;
+        raw.trade += y.trade + (colossus && y.trade > 0 ? 1 : 0);
+    }
+    s.base_trade = raw.trade;
+    // Trade routes: a share of both cities' trade.
+    c.routes.erase(std::remove_if(c.routes.begin(), c.routes.end(), [&](int id) { return city(id) == nullptr; }), c.routes.end());
+    for (int id : c.routes) {
+        const City *o = city(id);
+        CityStats mine;
+        mine.base_trade = raw.trade;
+        City probe;
+        probe.x = c.x;
+        probe.y = c.y;
+        probe.owner = c.owner;
+        probe.stats = mine;
+        s.route_trade += route_value(probe, *o);
+    }
+    raw.trade += s.route_trade;
+    s.raw = raw;
+    // Unit support.
+    const GovernmentInfo &gi = government_info(civ.govt);
+    int supported = 0;
+    for (const Unit &u : units) {
+        if (u.home != c.id) continue;
+        if (unit_info(u.type).flags & kSettlers) s.food_upkeep += gi.settler_food;
+        ++supported;
+    }
+    const int free_units = gi.free_units < 0 ? c.size : gi.free_units;
+    s.shield_upkeep = std::max(0, supported - free_units);
+    s.food_surplus = raw.food - c.size * 2 - s.food_upkeep;
+    int shields = raw.shields;
+    if (c.has(Building::Factory)) {
+        int pct = 150;
+        if (c.has(Building::PowerPlant) || c.has(Building::HydroPlant) || c.has(Building::NuclearPlant) || hoover_here(c)) pct += 50;
+        if (c.has(Building::MfgPlant)) pct += 100;
+        shields = shields * pct / 100;
+    }
+    s.shield_surplus = shields - s.shield_upkeep;
+    // Corruption grows with distance from the Palace (DOS formula, see
+    // dos_corruption): on all the city's trade, trade routes included.
+    s.palace_distance = palace_distance(c);
+    s.corruption = dos_corruption(raw.trade, s.palace_distance, civ.govt, c.has(Building::Courthouse));
+    const int trade = raw.trade - s.corruption;
+    int sci = (trade * civ.sci + 5) / 10;
+    int lux = std::min(trade - sci, (trade * civ.lux + 5) / 10);
+    int tax = trade - sci - lux;
+    if (civ.govt == Government::Anarchy) {
+        lux += sci + tax;
+        sci = tax = 0;
+    }
+    // Specialists, before the Marketplace, Bank, Library and University
+    // multiply them (DOS order). Under Anarchy scientists find nothing.
+    lux += c.entertainers * 2;
+    tax += c.taxmen * 2;
+    if (civ.govt != Government::Anarchy) sci += c.scientists * 2;
+    if (c.has(Building::Marketplace)) {
+        tax = tax * 3 / 2;
+        lux = lux * 3 / 2;
+    }
+    if (c.has(Building::Bank)) {
+        tax = tax * 3 / 2;
+        lux = lux * 3 / 2;
+    }
+    // Libraries and Universities: +50% each, +83% with Isaac Newton's College.
+    const int lib_pct = wonder_active(c.owner, Wonder::Newton) ? 183 : 150;
+    if (c.has(Building::Library)) sci = sci * lib_pct / 100;
+    if (c.has(Building::University)) sci = sci * lib_pct / 100;
+    if (wonder_in(c, Wonder::Copernicus)) sci *= 2;
+    if (wonder_active(c.owner, Wonder::Seti)) sci = sci * 3 / 2;
+    s.tax = tax;
+    s.lux = lux;
+    s.sci = sci;
+    // Happiness.
+    const int workers = c.size - c.specialists();
+    int content = std::clamp(content_base(difficulty) - empire_unhappy(c), 0, workers);
+    int unhappy = workers - content;
+    int happy = 0;
+    int l = lux;
+    while (l >= 2) {
+        if (content > 0) {
+            --content;
+            ++happy;
+        } else if (unhappy > 0) {
+            --unhappy;
+            ++content;
+        } else {
+            break;
+        }
+        l -= 2;
+    }
+    auto calm = [&](int n) {
+        const int k = std::min(n, unhappy);
+        unhappy -= k;
+        content += k;
+    };
+    if (c.has(Building::Temple)) {
+        const int t = has(c.owner, Advance::Mysticism) ? 2 : 1;
+        calm(wonder_active(c.owner, Wonder::Oracle) ? t * 2 : t);
+    }
+    if (c.has(Building::Colosseum)) calm(3);
+    if (c.has(Building::Cathedral)) calm(wonder_active(c.owner, Wonder::Michelangelo) ? 6 : 4);
+    if (wonder_active(c.owner, Wonder::Bach)) {
+        const City *home = wonder_home(Wonder::Bach);
+        if (home && map.at(home->x, home->y).continent == map.at(c.x, c.y).continent) calm(2);
+    }
+    // Hanging Gardens and the Cure for Cancer: one more happy citizen.
+    auto cheer = [&]() {
+        if (content > 0) {
+            --content;
+            ++happy;
+        } else if (unhappy > 0) {
+            --unhappy;
+            ++content;
+        }
+    };
+    if (wonder_active(c.owner, Wonder::HangingGardens)) cheer();
+    if (wonder_active(c.owner, Wonder::CureForCancer)) cheer();
+    if (civ.govt == Government::Despotism || civ.govt == Government::Monarchy || civ.govt == Government::Communism ||
+        civ.govt == Government::Anarchy) {
+        int troops = 0;
+        for (const Unit &u : units) {
+            if (u.owner == c.owner && u.x == c.x && u.y == c.y && military(u.type)) ++troops;
+        }
+        calm(std::min(3, troops));
+    }
+    if (civ.govt == Government::Republic || civ.govt == Government::Democracy) {
+        // Troops away from home make the people unhappy: one each in a
+        // Republic, two in a Democracy (less with Women's Suffrage).
+        int per = civ.govt == Government::Democracy ? 2 : 1;
+        if (wonder_active(c.owner, Wonder::Suffrage)) --per;
+        int away = 0;
+        for (const Unit &u : units) {
+            if (u.home != c.id || !military(u.type) || unit_info(u.type).attack == 0) continue;
+            const City *in = city_at(u.x, u.y);
+            if (in && in->owner == c.owner) continue;
+            if (map.at(u.x, u.y).fortress && map.distance(u.x, u.y, c.x, c.y) <= 3) continue;
+            ++away;
+        }
+        for (int k = 0; k < away * per; ++k) {
+            if (content > 0) {
+                --content;
+                ++unhappy;
+            } else if (happy > 0) {
+                --happy;
+                ++content;
+            }
+        }
+    }
+    if (wonder_in(c, Wonder::Shakespeare)) calm(unhappy);
+    s.happy = happy;
+    s.content = content;
+    s.unhappy = unhappy;
+    s.disorder = unhappy > happy;
+    s.food_box = food_box(c);
+    c.stats = s;
+}
+
+// A computer ruler's city of size 5 or more turns entertainers it can spare
+// into taxmen (when the treasury runs low or there is nothing to study) or
+// scientists, one at a time, as long as the city stays in order and keeps
+// any celebration it has.
+void Game::ai_specialists(City &c)
+{
+    const Civ &civ = civs[c.owner];
+    if (!civ.ai || civ.barbarian || c.manual || c.size < kSpecialistSize || c.entertainers <= 0) return;
+    int own = 0;
+    for (const City &o : cities) own += o.owner == c.owner;
+    const bool want_gold = civ.gold < 50 + 10 * own || civ.research == Advance::None || civ.govt == Government::Anarchy;
+    const bool celebrate = celebration_due(c);
+    while (c.entertainers > 0) {
+        --c.entertainers;
+        if (want_gold) ++c.taxmen;
+        else ++c.scientists;
+        compute_city_stats(c);
+        if (c.stats.disorder || (celebrate && !celebration_due(c))) {
+            ++c.entertainers;
+            if (want_gold) --c.taxmen;
+            else --c.scientists;
+            compute_city_stats(c);
+            break;
+        }
+    }
+}
+
 void Game::update_city(City &c)
 {
     if (!c.manual) {
@@ -672,172 +896,10 @@ void Game::update_city(City &c)
         c.worked = keep;
         settle_specialists(c);
     }
-    const Civ &civ = civs[c.owner];
     for (int pass = 0; pass < 12; ++pass) {
-        CityStats s;
-        const bool colossus = wonder_in(c, Wonder::Colossus);
-        Yield raw = tile_yield(c.x, c.y, c.owner, true, c.celebrating);
-        if (colossus && raw.trade > 0) raw.trade++;
-        for (const auto &w : c.worked) {
-            const Yield y = tile_yield(c.x + w.first, c.y + w.second, c.owner, false, c.celebrating);
-            raw.food += y.food;
-            raw.shields += y.shields;
-            raw.trade += y.trade + (colossus && y.trade > 0 ? 1 : 0);
-        }
-        s.base_trade = raw.trade;
-        // Trade routes: a share of both cities' trade.
-        c.routes.erase(std::remove_if(c.routes.begin(), c.routes.end(), [&](int id) { return city(id) == nullptr; }), c.routes.end());
-        for (int id : c.routes) {
-            const City *o = city(id);
-            CityStats mine;
-            mine.base_trade = raw.trade;
-            City probe;
-            probe.x = c.x;
-            probe.y = c.y;
-            probe.owner = c.owner;
-            probe.stats = mine;
-            s.route_trade += route_value(probe, *o);
-        }
-        raw.trade += s.route_trade;
-        s.raw = raw;
-        // Unit support.
-        const GovernmentInfo &gi = government_info(civ.govt);
-        int supported = 0;
-        for (const Unit &u : units) {
-            if (u.home != c.id) continue;
-            if (unit_info(u.type).flags & kSettlers) s.food_upkeep += gi.settler_food;
-            ++supported;
-        }
-        const int free_units = gi.free_units < 0 ? c.size : gi.free_units;
-        s.shield_upkeep = std::max(0, supported - free_units);
-        s.food_surplus = raw.food - c.size * 2 - s.food_upkeep;
-        int shields = raw.shields;
-        if (c.has(Building::Factory)) {
-            int pct = 150;
-            if (c.has(Building::PowerPlant) || c.has(Building::HydroPlant) || c.has(Building::NuclearPlant) || hoover_here(c)) pct += 50;
-            if (c.has(Building::MfgPlant)) pct += 100;
-            shields = shields * pct / 100;
-        }
-        s.shield_surplus = shields - s.shield_upkeep;
-        // Corruption grows with distance from the Palace (DOS formula, see
-        // dos_corruption): on all the city's trade, trade routes included.
-        s.palace_distance = palace_distance(c);
-        s.corruption = dos_corruption(raw.trade, s.palace_distance, civ.govt, c.has(Building::Courthouse));
-        const int trade = raw.trade - s.corruption;
-        int sci = (trade * civ.sci + 5) / 10;
-        int lux = std::min(trade - sci, (trade * civ.lux + 5) / 10);
-        int tax = trade - sci - lux;
-        if (civ.govt == Government::Anarchy) {
-            lux += sci + tax;
-            sci = tax = 0;
-        }
-        // Specialists, before the Marketplace, Bank, Library and University
-        // multiply them (DOS order). Under Anarchy scientists find nothing.
-        lux += c.entertainers * 2;
-        tax += c.taxmen * 2;
-        if (civ.govt != Government::Anarchy) sci += c.scientists * 2;
-        if (c.has(Building::Marketplace)) {
-            tax = tax * 3 / 2;
-            lux = lux * 3 / 2;
-        }
-        if (c.has(Building::Bank)) {
-            tax = tax * 3 / 2;
-            lux = lux * 3 / 2;
-        }
-        // Libraries and Universities: +50% each, +83% with Isaac Newton's College.
-        const int lib_pct = wonder_active(c.owner, Wonder::Newton) ? 183 : 150;
-        if (c.has(Building::Library)) sci = sci * lib_pct / 100;
-        if (c.has(Building::University)) sci = sci * lib_pct / 100;
-        if (wonder_in(c, Wonder::Copernicus)) sci *= 2;
-        if (wonder_active(c.owner, Wonder::Seti)) sci = sci * 3 / 2;
-        s.tax = tax;
-        s.lux = lux;
-        s.sci = sci;
-        // Happiness.
-        const int workers = c.size - c.specialists();
-        int content = std::clamp(content_base(difficulty) - empire_unhappy(c), 0, workers);
-        int unhappy = workers - content;
-        int happy = 0;
-        int l = lux;
-        while (l >= 2) {
-            if (content > 0) {
-                --content;
-                ++happy;
-            } else if (unhappy > 0) {
-                --unhappy;
-                ++content;
-            } else {
-                break;
-            }
-            l -= 2;
-        }
-        auto calm = [&](int n) {
-            const int k = std::min(n, unhappy);
-            unhappy -= k;
-            content += k;
-        };
-        if (c.has(Building::Temple)) {
-            const int t = has(c.owner, Advance::Mysticism) ? 2 : 1;
-            calm(wonder_active(c.owner, Wonder::Oracle) ? t * 2 : t);
-        }
-        if (c.has(Building::Colosseum)) calm(3);
-        if (c.has(Building::Cathedral)) calm(wonder_active(c.owner, Wonder::Michelangelo) ? 6 : 4);
-        if (wonder_active(c.owner, Wonder::Bach)) {
-            const City *home = wonder_home(Wonder::Bach);
-            if (home && map.at(home->x, home->y).continent == map.at(c.x, c.y).continent) calm(2);
-        }
-        // Hanging Gardens and the Cure for Cancer: one more happy citizen.
-        auto cheer = [&]() {
-            if (content > 0) {
-                --content;
-                ++happy;
-            } else if (unhappy > 0) {
-                --unhappy;
-                ++content;
-            }
-        };
-        if (wonder_active(c.owner, Wonder::HangingGardens)) cheer();
-        if (wonder_active(c.owner, Wonder::CureForCancer)) cheer();
-        if (civ.govt == Government::Despotism || civ.govt == Government::Monarchy || civ.govt == Government::Communism ||
-            civ.govt == Government::Anarchy) {
-            int troops = 0;
-            for (const Unit &u : units) {
-                if (u.owner == c.owner && u.x == c.x && u.y == c.y && military(u.type)) ++troops;
-            }
-            calm(std::min(3, troops));
-        }
-        if (civ.govt == Government::Republic || civ.govt == Government::Democracy) {
-            // Troops away from home make the people unhappy: one each in a
-            // Republic, two in a Democracy (less with Women's Suffrage).
-            int per = civ.govt == Government::Democracy ? 2 : 1;
-            if (wonder_active(c.owner, Wonder::Suffrage)) --per;
-            int away = 0;
-            for (const Unit &u : units) {
-                if (u.home != c.id || !military(u.type) || unit_info(u.type).attack == 0) continue;
-                const City *in = city_at(u.x, u.y);
-                if (in && in->owner == c.owner) continue;
-                if (map.at(u.x, u.y).fortress && map.distance(u.x, u.y, c.x, c.y) <= 3) continue;
-                ++away;
-            }
-            for (int k = 0; k < away * per; ++k) {
-                if (content > 0) {
-                    --content;
-                    ++unhappy;
-                } else if (happy > 0) {
-                    --happy;
-                    ++content;
-                }
-            }
-        }
-        if (wonder_in(c, Wonder::Shakespeare)) calm(unhappy);
-        s.happy = happy;
-        s.content = content;
-        s.unhappy = unhappy;
-        s.disorder = unhappy > happy;
-        s.food_box = food_box(c);
-        c.stats = s;
+        compute_city_stats(c);
         // Computer players and auto-arranged cities keep order with entertainers.
-        if (!s.disorder || c.manual || c.worked.empty()) break;
+        if (!c.stats.disorder || c.manual || c.worked.empty()) break;
         // Retire the poorest worker.
         auto worst = std::min_element(c.worked.begin(), c.worked.end(), [&](const auto &a, const auto &b) {
             const Yield ya = tile_yield(c.x + a.first, c.y + a.second, c.owner, false);
@@ -847,6 +909,7 @@ void Game::update_city(City &c)
         c.worked.erase(worst);
         settle_specialists(c);
     }
+    ai_specialists(c);
 }
 
 int Game::ai_cost_percent(int civ) const
@@ -1270,7 +1333,7 @@ void Game::ai_barbarians(int bc)
 const char *diplo_action_name(DiploAction a)
 {
     static const char *n[] = {"Establish Embassy", "Investigate City", "Steal Technology", "Industrial Sabotage",
-                              "Incite a Revolt", "Bribe Unit"};
+                              "Incite a Revolt", "Meet with King", "Bribe Unit"};
     return n[static_cast<int>(a)];
 }
 
@@ -1334,6 +1397,7 @@ bool Game::diplomat_can(int unit_id, int tx, int ty, DiploAction a) const
         return false;
     }
     case DiploAction::Sabotage: return true;
+    case DiploAction::MeetKing: return !civs[c->owner].barbarian && civs[c->owner].alive;
     case DiploAction::Incite: {
         const int cost = incite_cost(*c, me);
         return cost > 0 && civs[me].gold >= cost;
@@ -1352,6 +1416,12 @@ std::string Game::diplomat_act(int unit_id, int tx, int ty, DiploAction a)
     const int them = c ? c->owner : owner_at(tx, ty);
     civs[me].contact |= static_cast<std::uint8_t>(1u << them);
     civs[them].contact |= static_cast<std::uint8_t>(1u << me);
+    if (a == DiploAction::MeetKing) {
+        // DOS: the audience costs the Diplomat its turn, not its life.
+        u->moves = 0;
+        u->order = Order::None;
+        return std::string();
+    }
     // Hostile acts against a people at peace are an incident: war.
     if (diplomat_hostile(a) && !at_war(me, them)) declare_war(me, them);
     std::string out;
@@ -1433,7 +1503,11 @@ std::string Game::diplomat_act(int unit_id, int tx, int ty, DiploAction a)
     default: break;
     }
     say(me, a == DiploAction::Investigate ? MsgKind::Info : MsgKind::Good, out, tx, ty);
-    kill_unit(unit_id);
+    if (diplomat_spent(a)) {
+        kill_unit(unit_id);
+    } else if (Unit *dip = unit(unit_id)) {
+        dip->moves = 0;   // a bribe takes the Diplomat's turn
+    }
     if (a == DiploAction::Incite) check_elimination();
     return out;
 }
@@ -1583,6 +1657,8 @@ MoveResult Game::attack(int unit_id, int tx, int ty)
     Unit *d = unit(best);
     const int att_owner = a->owner, def_owner = d->owner;
     if (!at_war(att_owner, def_owner)) declare_war(att_owner, def_owner);
+    // DOS: any fight between two peoples (raiders aside) ends world peace.
+    if (!civs[att_owner].barbarian && !civs[def_owner].barbarian) peace_turns = 0;
     CombatResult r;
     r.happened = true;
     r.att_type = a->type;
@@ -1788,6 +1864,22 @@ MoveResult Game::move(int unit_id, int dx, int dy)
             u->carried_by = -1;
         }
     }
+    // A ship putting out from one of our cities takes the sentried land
+    // units there aboard, as many as it has room for (DOS).
+    if (i.domain == Domain::Sea && i.capacity > 0 && !(i.flags & kCarriesAir) && map.ocean(tx, ty)) {
+        const City *port = city_at(fx, fy);
+        if (port && port->owner == u->owner) {
+            int room = i.capacity - cargo_count(u->id);
+            for (Unit &c : units) {
+                if (room <= 0) break;
+                if (c.owner == u->owner && c.x == fx && c.y == fy && c.carried_by < 0 && c.order == Order::Sentry &&
+                    unit_info(c.type).domain == Domain::Land) {
+                    c.carried_by = u->id;
+                    --room;
+                }
+            }
+        }
+    }
     // Ships take their cargo along.
     if (i.domain == Domain::Sea) {
         for (Unit &c : units) {
@@ -1800,7 +1892,11 @@ MoveResult Game::move(int unit_id, int dx, int dy)
     (void)fx;
     (void)fy;
     reveal(u->owner, tx, ty, (i.flags & kSight2) ? 2 : 1);
-    if (map.at(tx, ty).hut && i.domain == Domain::Land) enter_hut(*u);
+    if (map.at(tx, ty).hut && i.domain == Domain::Land) {
+        enter_hut(unit_id);   // may add units: look the unit up again
+        u = unit(unit_id);
+        if (!u) return result;
+    }
     if (u->type == UnitType::Caravan) {
         const City *c = city_at(tx, ty);
         if (c && c->owner == u->owner && (caravan_can_help(*u, *c) || caravan_can_trade(*u, *c))) result = MoveResult::Caravan;
@@ -1824,6 +1920,7 @@ MoveResult Game::nuke(int unit_id, int tx, int ty)
     tx = map.wrap_x(tx);
     const int victim = owner_at(tx, ty);
     if (victim >= 0 && victim != me && !at_war(me, victim)) declare_war(me, victim);
+    if (victim >= 0 && victim != me && !civs[victim].barbarian && !civs[me].barbarian) peace_turns = 0;
     kill_unit(unit_id);   // the missile is spent either way
     if (const City *sdi = sdi_cover(me, tx, ty)) {
         say(me, MsgKind::Bad, "SDI Defense in " + sdi->name + " shoots down your Nuclear missile.", tx, ty);
@@ -2063,32 +2160,107 @@ void Game::natural_disasters()
     }
 }
 
-void Game::enter_hut(Unit &u)
+// A village of a minor tribe (DOS UnitManagement FoundMinorTribeHut): one
+// of four rolls, shaped by how far the nearest city of anyone's stands.
+//   0: four or more squares off -- an advanced tribe becomes a free city
+//      when that is four or five squares; further out, 50 gold. Closer:
+//      mercenaries.
+//   1: before 1000 AD, an advance (never Future Tech); after, 50 gold.
+//   2: 50 gold.
+//   3: within three squares, or with no city of our own: mercenaries;
+//      otherwise a horde of barbarians.
+// Mercenaries are a Legion or Cavalry; the horde is Cavalry on open
+// ground and Legions in rough, one to eight of them by how few cities we
+// have. Aircraft fly over; the raiders find nothing.
+HutOutcome Game::hut_outcome(int owner, int x, int y, int roll) const
 {
-    Tile &t = map.at(u.x, u.y);
-    t.hut = false;
-    const int roll = rng.below(100);
-    const int owner = u.owner;
-    if (roll < 35) {
-        civs[owner].gold += 50;
-        say(owner, MsgKind::Good, "You find 50 gold in the ruins of an old village.", u.x, u.y);
-    } else if (roll < 60) {
+    int nearest = 1 << 30;
+    for (const City &c : cities) nearest = std::min(nearest, map.distance(x, y, c.x, c.y));
+    int own = 0;
+    for (const City &c : cities) own += c.owner == owner;
+    switch (roll) {
+    case 0:
+        if (nearest > 3) return nearest < 6 ? HutOutcome::FreeCity : HutOutcome::Gold;
+        return HutOutcome::Mercenaries;
+    case 1: return (turn <= 1 || year_for_turn(turn) > 1000) ? HutOutcome::Gold : HutOutcome::Advance;
+    case 2: return HutOutcome::Gold;
+    default: return (nearest < 4 || own == 0) ? HutOutcome::Mercenaries : HutOutcome::Barbarians;
+    }
+}
+
+void Game::enter_hut(int unit_id)
+{
+    Unit *u = unit(unit_id);
+    if (!u) return;
+    const int x = u->x, y = u->y, owner = u->owner;
+    map.at(x, y).hut = false;
+    if (civs[owner].barbarian || unit_info(u->type).domain == Domain::Air) return;
+    HutOutcome out = hut_outcome(owner, x, y, rng.below(4));
+    if (out == HutOutcome::Advance) {
         std::vector<Advance> opts = researchable(owner);
         opts.erase(std::remove(opts.begin(), opts.end(), Advance::FutureTech), opts.end());
-        if (!opts.empty()) {
-            const Advance a = opts[rng.below(static_cast<int>(opts.size()))];
-            learn(owner, a);
-            say(owner, MsgKind::Tech, std::string("Wise elders of the village teach you ") + advance_info(a).name + ".", u.x, u.y);
+        if (opts.empty()) {
+            out = HutOutcome::Gold;
         } else {
-            civs[owner].gold += 25;
+            const Advance a = opts[rng.below(static_cast<int>(opts.size()))];
+            say(owner, MsgKind::Tech, std::string("You have discovered scrolls of ancient wisdom: the secret of ") + advance_info(a).name + ".", x, y);
+            learn(owner, a);
+            if (civs[owner].ai && civs[owner].research == Advance::None) choose_research_ai(owner);
+            return;
         }
-    } else if (roll < 85) {
-        const int id = add_unit(owner, UnitType::Legion, u.x, u.y, -1);
-        if (Unit *m = unit(id)) m->moves = 0;
-        say(owner, MsgKind::Good, "A band of mercenaries joins you: a Legion.", u.x, u.y);
-    } else {
-        say(owner, MsgKind::Info, "The village is long abandoned.", u.x, u.y);
     }
+    const int bc = barbarian_civ();
+    if (out == HutOutcome::Barbarians && bc < 0) out = HutOutcome::Mercenaries;
+    if (out == HutOutcome::FreeCity && make_city(owner, x, y) < 0) out = HutOutcome::Gold;
+    switch (out) {
+    case HutOutcome::Gold:
+        civs[owner].gold += 50;
+        say(owner, MsgKind::Good, "You have discovered valuable metal deposits worth 50 gold.", x, y);
+        break;
+    case HutOutcome::FreeCity:
+        say(owner, MsgKind::Good, "You have discovered an advanced tribe. They join you as the city of " + city_at(x, y)->name + ".", x, y);
+        break;
+    case HutOutcome::Mercenaries: {
+        const UnitType t = rng.below(2) ? UnitType::Legion : UnitType::Cavalry;
+        add_unit(owner, t, x, y, -1);
+        say(owner, MsgKind::Good, std::string("You have discovered a friendly tribe of skilled mercenaries: a ") + unit_info(t).name + " joins you.", x, y);
+        break;
+    }
+    case HutOutcome::Barbarians: {
+        // Around the village, every square or every second, third or
+        // fourth one: 8 raiders against three cities or more, 4 against
+        // two, 3 against one.
+        int own = 0;
+        for (const City &c : cities) own += c.owner == owner;
+        const int step = std::clamp(4 - own, 1, 4);
+        static const int kDirs[8][2] = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
+        int n = 0;
+        for (int k = 0; k < 8; k += step) {
+            const int nx = map.wrap_x(x + kDirs[k][0]), ny = y + kDirs[k][1];
+            if (!map.valid_y(ny) || !map.land(nx, ny) || city_at(nx, ny) || owner_at(nx, ny) >= 0) continue;
+            const UnitType t = terrain_info(map.at(nx, ny).terrain).move < 3 ? UnitType::Cavalry : UnitType::Legion;
+            add_unit(bc, t, nx, ny, -1);
+            ++n;
+        }
+        civs[owner].contact |= static_cast<std::uint8_t>(1u << bc);
+        say(owner, MsgKind::Bad, "You have unleashed a horde of barbarians! " + std::to_string(n) + (n == 1 ? " raider" : " raiders") + " pour out of the village.", x, y);
+        break;
+    }
+    default: break;
+    }
+}
+
+int Game::make_city(int owner, int x, int y)
+{
+    x = map.wrap_x(x);
+    if (!map.valid_y(y) || !map.land(x, y) || city_at(x, y)) return -1;
+    const int s = add_unit(owner, UnitType::Settlers, x, y, -1);
+    const int id = next_city_id;
+    if (!found_city(s)) {
+        kill_unit(s);
+        return -1;
+    }
+    return id;
 }
 
 void Game::capture_city(City &c, int new_owner)
@@ -2164,6 +2336,15 @@ void Game::capture_city(City &c, int new_owner)
     }
     for (int id : drop) kill_unit(id);
     say(new_owner, MsgKind::Good, "You capture " + c.name + "! Plunder: " + std::to_string(plunder) + " gold.", c.x, c.y);
+    if ((new_owner == human && !civs[new_owner].ai) || (old == human && !civs[old].ai)) {
+        GameEvent e;
+        e.kind = new_owner == human ? EventKind::CityTaken : EventKind::CityLost;
+        e.civ = human;
+        e.arg = new_owner == human ? old : new_owner;
+        e.city = c.id;
+        e.name = c.name;
+        events.push_back(e);
+    }
     say(old, MsgKind::Bad, c.name + " has fallen to the " + civs[new_owner].name + ".", c.x, c.y);
     update_city(c);
     reveal(new_owner, c.x, c.y, 2);
@@ -2968,6 +3149,13 @@ void Game::start_turn_for(int ci)
             civ.tax = std::min(10 - civ.sci, mx);
             civ.lux = 10 - civ.sci - civ.tax;
             say(ci, MsgKind::Good, std::string("The new government is ") + government_info(civ.govt).name + ".");
+            if (ci == human && !civ.ai) {
+                GameEvent e;
+                e.kind = EventKind::Government;
+                e.civ = ci;
+                e.arg = static_cast<int>(civ.govt);
+                events.push_back(e);
+            }
         }
     }
     bool learned = false;
@@ -3138,6 +3326,8 @@ void Game::new_turn()
         for (Civ &c : civs) c.bulbs *= 2;
     }
     update_tech_catchup();
+    // World peace counts in AD, a turn at a time (DOS: at the human's turn).
+    if (year_for_turn(turn) > 0 && human >= 0 && human < static_cast<int>(civs.size()) && civs[human].alive) ++peace_turns;
     for (int c = 0; c < static_cast<int>(civs.size()); ++c) start_turn_for(c);
     natural_disasters();
     ceasefires_end();
@@ -3145,6 +3335,20 @@ void Game::new_turn()
     space_arrivals();
     check_elimination();
     refresh_visibility();
+    // The end of history: a warning 20 years ahead, then the final score.
+    if (!game_ended && !over() && human >= 0 && human < static_cast<int>(civs.size())) {
+        const int was = year_for_turn(turn - 1), now = year_for_turn(turn);
+        const int warn = kEndYear - kRetireWarningYears;
+        const std::string ruler = std::string(leader_title(human)) + " " + civs[human].leader;
+        if (was < warn && now >= warn && now < kEndYear)
+            say(human, MsgKind::Info, ruler + " plans to retire in " + std::to_string(kEndYear - now) + " years.");
+        if (now >= kEndYear) {
+            game_ended = true;
+            end_turn_number = turn;
+            say(-1, MsgKind::Good, "The year " + year_text(now) + " has come. After six thousand years of history the reign of " + ruler +
+                                       " of the " + civs[human].name + " is at an end.");
+        }
+    }
 }
 
 void Game::end_turn()

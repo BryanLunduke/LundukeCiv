@@ -16,7 +16,8 @@ namespace civ {
 
 namespace {
 
-constexpr const char *kMagic = "LUNDUKECIV 5";      // written
+constexpr const char *kMagic = "LUNDUKECIV 6";      // written
+constexpr const char *kMagic5 = "LUNDUKECIV 5";     // still read: before the score and the end of the game
 constexpr const char *kMagic4 = "LUNDUKECIV 4";     // still read: before diplomacy talks and tribes
 constexpr const char *kMagic3 = "LUNDUKECIV 3";     // still read: before Recycling was dropped
 constexpr const char *kMagic2 = "LUNDUKECIV 2";     // still read: milestone 2 saves
@@ -169,7 +170,8 @@ std::string save_game(const Game &g)
     for (const Unit &u : g.units) {
         o << "unit|" << u.id << "|" << static_cast<int>(u.type) << "|" << u.owner << "|" << u.x << "|" << u.y << "|"
           << u.moves << "|" << u.veteran << "|" << static_cast<int>(u.order) << "|" << u.work << "|" << u.home << "|"
-          << u.goto_x << "|" << u.goto_y << "|" << u.fuel << "|" << u.carried_by << "|" << u.done << "|" << u.hp << "\n";
+          << u.goto_x << "|" << u.goto_y << "|" << u.fuel << "|" << u.carried_by << "|" << u.done << "|" << u.hp << "|"
+          << static_cast<int>(u.plan) << "\n";
     }
     o << "wonders";
     for (int w = 0; w < kWonderCount; ++w) o << "|" << g.wonder_city[w];
@@ -178,6 +180,9 @@ std::string save_game(const Game &g)
     for (std::uint32_t b : g.wonder_started) o << "|" << b;
     o << "\n";
     o << "space|" << (g.space_win ? 1 : 0) << "\n";
+    // Version 6: world peace and the end of the game.
+    o << "end6|" << g.peace_turns << "|" << (g.game_ended ? 1 : 0) << "|" << (g.retired ? 1 : 0) << "|" << g.end_turn_number << "|"
+      << g.opponents << "\n";
     o << "end\n";
     return o.str();
 }
@@ -190,10 +195,11 @@ bool load_game(const std::string &text, Game &out, std::string *error)
     };
     std::istringstream in(text);
     std::string line;
-    if (!std::getline(in, line) || (line != kMagic && line != kMagic4 && line != kMagic3 && line != kMagic2 && line != kMagic1)) return fail("Not a Lunduke Civ saved game.");
-    const int version = line == kMagic ? 5 : line == kMagic4 ? 4 : line == kMagic3 ? 3 : (line == kMagic2 ? 2 : 1);
+    if (!std::getline(in, line) || (line != kMagic && line != kMagic5 && line != kMagic4 && line != kMagic3 && line != kMagic2 && line != kMagic1)) return fail("Not a Lunduke Civ saved game.");
+    const int version = line == kMagic ? 6 : line == kMagic5 ? 5 : line == kMagic4 ? 4 : line == kMagic3 ? 3 : (line == kMagic2 ? 2 : 1);
     Game g;
     bool ended = false;
+    bool have_end6 = false;
     while (std::getline(in, line)) {
         if (line.empty()) continue;
         const std::vector<std::string> f = split(line);
@@ -345,6 +351,7 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             u.carried_by = static_cast<int>(num(f, 14));
             u.done = num(f, 15) != 0;
             u.hp = f.size() > 16 ? std::clamp(static_cast<int>(num(f, 16)), 1, kUnitHp) : kUnitHp;
+            u.plan = static_cast<std::uint8_t>(std::clamp(static_cast<int>(num(f, 17)), 0, 2));   // version 6
             g.units.push_back(u);
         } else if (k == "civ5") {
             const int i = static_cast<int>(num(f, 1));
@@ -368,6 +375,13 @@ bool load_game(const std::string &text, Game &out, std::string *error)
             g.civil_wars = static_cast<int>(num(f, 1));
         } else if (k == "wonders") {
             for (int w = 0; w < kWonderCount && w + 1 < static_cast<int>(f.size()); ++w) g.wonder_city[w] = static_cast<int>(num(f, w + 1));
+        } else if (k == "end6") {
+            have_end6 = true;
+            g.peace_turns = std::max(0, static_cast<int>(num(f, 1)));
+            g.game_ended = num(f, 2) != 0;
+            g.retired = num(f, 3) != 0;
+            g.end_turn_number = std::max(0, static_cast<int>(num(f, 4)));
+            g.opponents = std::max(0, static_cast<int>(num(f, 5)));
         } else if (k == "space") {
             g.space_win = num(f, 1) != 0;
         } else if (k == "climate") {
@@ -386,6 +400,12 @@ bool load_game(const std::string &text, Game &out, std::string *error)
     }
     for (const Unit &u : g.units) {
         if (u.owner < 0 || u.owner >= static_cast<int>(g.civs.size())) return fail("Unit with a bad owner.");
+    }
+    if (!have_end6) {
+        // Before version 6: no count of peace kept, and the rivals the game
+        // started with are the computer peoples on the list.
+        for (size_t i = 0; i < g.civs.size(); ++i)
+            g.opponents += static_cast<int>(i) != g.human && !g.civs[i].barbarian;
     }
     // Saves from before barbarians: add them.
     if (g.barbarian_civ() < 0 && static_cast<int>(g.civs.size()) < kMaxCivs) {
