@@ -11,6 +11,7 @@
 #include "map.hpp"
 #include "rng.hpp"
 #include "rules.hpp"
+#include "tribes.hpp"
 
 #include <array>
 #include <algorithm>
@@ -21,7 +22,8 @@
 namespace civ {
 
 constexpr int kMaxCivs = 8;
-constexpr int kUnitHp = 10;   // hit points of a healthy unit; each lost combat round costs one
+constexpr int kUnitHp = 10;
+constexpr int kCeasefireTurns = 16;   // hit points of a healthy unit; each lost combat round costs one
 
 enum class Order : std::uint8_t { None, Fortifying, Fortified, Sentry, Goto, Road, Irrigate, Mine, Fortress, Railroad };
 
@@ -89,6 +91,11 @@ struct City {
     bool bought = false;
     std::vector<int> routes;     // trade route partner city ids (up to 3)
     std::uint8_t stolen = 0;     // civs whose diplomats already stole an advance here
+    // "We Love the King Day": a celebration that started last turn (more
+    // than half the people happy, none unhappy, size 3 or more).
+    bool celebrating = false;
+    int disorder_turns = 0;      // turns in a row in civil disorder
+    bool sold = false;           // a building was sold here this turn (one a turn)
     CityStats stats;
 
     bool has(Building b) const { return (buildings >> static_cast<int>(b)) & 1u; }
@@ -117,6 +124,14 @@ struct Civ {
     std::uint8_t war = 0;       // bit per civ
     std::uint8_t contact = 0;   // bit per civ
     std::uint8_t embassy = 0;   // bit per civ we have an embassy with
+    // Treaties (bit per civ, kept the same on both sides): a cease-fire
+    // runs out after kCeasefireTurns; a peace treaty lasts until broken.
+    std::uint8_t ceasefire = 0;
+    std::uint8_t peace = 0;
+    std::uint8_t vendetta = 0;  // grudges: civs that broke a treaty with us or nuked us
+    std::array<int, kMaxCivs> ceasefire_end{};
+    std::array<int, kMaxCivs> last_talk{};   // turn of the last audience with each civ (0 never)
+    int tribe = -1;             // Civ 1 tribe (tribe_info), -1 a people of the player's own making
     bool barbarian = false;     // the raiders: always at war, never a rival for victory
     // The spaceship.
     int structurals = 0;
@@ -177,6 +192,9 @@ struct CombatResult {
 
 enum class MoveResult : std::uint8_t {
     Moved, Attacked, Captured, Boarded, Blocked, NoMoves, NeedWar, Zoc, Failed, Destroyed,
+    FighterOnly,   // only Fighters may attack aircraft outside a city
+    Nuked,         // a Nuclear unit went off (or was shot down by SDI Defense)
+    Senate,        // the Senate will not let a Republic or Democracy break a treaty
     Diplomat,   // a Diplomat reached a foreign city or unit: choose an action
     Caravan,    // a Caravan reached a city: help a wonder or open a trade route
 };
@@ -196,20 +214,12 @@ struct GameSettings {
     int civs = 5;              // including the player
     std::string player_name = "Lundukians";
     std::string player_leader = "Bryan";
-    int player_color = 0;
+    int player_color = 1;      // a people of the player's own making (tribe -1)
+    int player_tribe = -1;     // or one of the fourteen (tribe_info)
     int land_pct = 32;
     bool all_ai = false;       // autoplay: the player's civ is run by the computer too
 };
 
-// Civ names offered for the computer players: peoples of history.
-struct CivPreset {
-    const char *name;
-    const char *leader;
-    int color;
-    const char *cities[16];
-};
-const CivPreset &civ_preset(int i);
-int civ_preset_count();
 const char *player_city_name(int i);
 
 class Game {
@@ -227,6 +237,7 @@ public:
     std::vector<Message> messages;
     CombatResult last_combat;
     int winner = -1;           // civ that won by conquest or by reaching Alpha Centauri
+    int civil_wars = 0;
     bool space_win = false;    // the winner's colonists reached Alpha Centauri
     bool human_dead = false;
     bool all_ai = false;
@@ -290,7 +301,10 @@ public:
     int wonders_in(const City &c) const;               // count, for the city screen
 
     // --- rules
-    Yield tile_yield(int x, int y, int civ, bool centre) const;
+    // `celebrating`: the city working the square holds a "We Love the King
+    // Day" (DOS: no Despotism penalty; Monarchy and Communism get the
+    // Republic's +1 trade).
+    Yield tile_yield(int x, int y, int civ, bool centre, bool celebrating = false) const;
     bool tile_free_for(const City &c, int x, int y) const;
     void update_city(City &c);            // recompute stats (and arrange workers unless manual)
     void arrange_workers(City &c);
@@ -302,8 +316,25 @@ public:
     int ai_cost_percent(int civ) const;
     int food_box(const City &c) const { return std::max(4, (c.size + 1) * ai_cost_percent(c.owner) / 10); }
     int size_cap(const City &c) const { return c.has(Building::Aqueduct) ? 99 : 10; }
+    // DOS buy price with r the shields still needed: units 2r + r*r/20,
+    // improvements 2r, Wonders and spaceship parts 4r; twice that when the
+    // box is empty.
     int buy_cost(const City &c) const;
     int production_cost(const City &c) const;
+    // Empire size (DOS, human rulers only): with N our cities and
+    //   r = (government / 2 + 2) x ((14 - 2 x level) / 2)
+    // a city gets ((id mod r) + N - r) / r more unhappy citizens (never < 0).
+    int empire_size_step(int civ) const;
+    int empire_unhappy(const City &c) const;
+    // A city celebrates "We Love the King Day" (DOS): size 3 or more, no
+    // unhappy citizens, at least half (rounded up) happy, not in Anarchy.
+    bool celebration_due(const City &c) const;
+    // Gold upkeep of one building in a city (Barracks: 1, +1 from Prince,
+    // +1 on Emperor, +1 each with Gunpowder and Combustion, as in DOS).
+    int building_upkeep(int civ, int b) const;
+    // One building a turn may be sold, for its cost in shields as gold.
+    bool can_sell(const City &c, int b) const;
+    bool sell_building(int city_id, int b);
     double defense_strength(const Unit &d, const Unit *attacker) const;
     double attack_strength(const Unit &a) const;
     int move_cost(const Unit &u, int fx, int fy, int tx, int ty) const;
@@ -332,7 +363,30 @@ public:
         return a != b && (civs[a].barbarian || civs[b].barbarian || ((civs[a].war >> b) & 1u));
     }
     void set_rates(int civ, int tax, int lux, int sci);
+    // --- orders from the DOS Orders menu
+    bool can_pillage(const Unit &u) const;
+    bool pillage(int unit_id);               // mine/irrigation, else railroad, else road
+    bool set_home_city(int unit_id);         // the city the unit stands in supports it
+    int unload(int ship_id);                 // wakes the cargo; returns how many
+    // --- nuclear attack (DOS): every unit on the target and the eight
+    // squares around it dies, every city there loses half its people. A
+    // city with SDI Defense within 3 squares of the target shoots it down.
+    const City *sdi_cover(int attacker, int tx, int ty) const;
+    MoveResult nuke(int unit_id, int tx, int ty);
+    // --- natural disasters (DOS, after turn 50: two random city slots of
+    // 128 each turn; size 5+, owner with more than one city).
+    enum class Disaster : std::uint8_t { Earthquake, Plague, Flood, Volcano, Famine, Fire, Pirates, Count };
+    bool disaster(City &c, Disaster d);      // true if it struck
+    void natural_disasters();
+    // Triremes of a human ruler that end the turn with no land next to them
+    // are lost half the time (DOS).
+    void triremes_at_sea(int civ);
+    // The advance a conqueror takes from a captured city: the most advanced
+    // one the loser knows and the winner does not (None if none).
+    Advance capture_tech(int winner, int loser) const;
     void revolution(int civ, Government g);
+    int anarchy_turns(int civ) const;            // DOS: to the next turn divisible by 4
+    const char *leader_title(int civ) const;     // "King", "Consul"... by government
     bool buy(int city_id);
     void set_production(int city_id, bool unit, int what);
     void toggle_tile(int city_id, int dx, int dy);
@@ -401,6 +455,7 @@ private:
     void enter_hut(Unit &u);
     void capture_city(City &c, int new_owner);
     std::string next_city_name(int civ);
+    void set_tribe(int civ, int tribe);   // name, leader, colour and cities of a Civ 1 people
     void choose_research_ai(int civ);
     void complete_wonder(City &c, Wonder w);
     void announce_wonder_start(const City &c);

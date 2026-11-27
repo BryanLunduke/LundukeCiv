@@ -7,28 +7,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <queue>
 
 namespace civ {
 
 namespace {
-
-const CivPreset kPresets[] = {
-    {"Sumerians", "Gilgamesh", 1, {"Ur", "Uruk", "Eridu", "Lagash", "Nippur", "Kish", "Umma", "Larsa", "Isin", "Adab",
-                                   "Shuruppak", "Sippar", "Akshak", "Girsu", "Bad-tibira", "Zabalam"}},
-    {"Egyptians", "Ramesses", 2, {"Thebes", "Memphis", "Heliopolis", "Abydos", "Elephantine", "Hermopolis", "Edfu",
-                                  "Giza", "Avaris", "Bubastis", "Tanis", "Sais", "Akhetaten", "Buto", "Coptos", "Hierakonpolis"}},
-    {"Greeks", "Pericles", 3, {"Athens", "Sparta", "Corinth", "Argos", "Thebes", "Delphi", "Megara", "Miletus",
-                               "Ephesus", "Rhodes", "Syracuse", "Olympia", "Knossos", "Mycenae", "Chalcis", "Eretria"}},
-    {"Carthaginians", "Hannibal", 4, {"Carthage", "Utica", "Hippo", "Hadrumetum", "Lixus", "Gades", "Motya",
-                                      "Panormus", "Leptis", "Thapsus", "Kerkouane", "Sabratha", "Tharros", "Nora", "Sulci", "Ebusus"}},
-    {"Persians", "Cyrus", 5, {"Persepolis", "Pasargadae", "Susa", "Ecbatana", "Babylon", "Sardis", "Bactra",
-                              "Gordion", "Tarsus", "Arbela", "Rhagae", "Hecatompylos", "Kerman", "Gabae", "Maracanda", "Zadracarta"}},
-    {"Norse", "Harald", 6, {"Trondheim", "Uppsala", "Hedeby", "Birka", "Kaupang", "Roskilde", "Ribe", "Sigtuna",
-                            "Jelling", "Lund", "Bergen", "Oslo", "Aarhus", "Viborg", "Tunsberg", "Skiringssal"}},
-    {"Mayans", "Pacal", 7, {"Palenque", "Tikal", "Calakmul", "Copan", "Uxmal", "Chichen", "Caracol", "Yaxchilan",
-                            "Bonampak", "Quirigua", "Coba", "Mayapan", "Piedras", "Dzibanche", "Naranjo", "Altun Ha"}},
-};
 
 const char *kPlayerCities[] = {
     "Lundukia", "Amberford", "Tuxhaven", "Penhallow", "Greywater", "Stonebridge", "Kestrel", "Marrowdale",
@@ -48,8 +32,6 @@ bool military(UnitType t)
 
 } // namespace
 
-const CivPreset &civ_preset(int i) { return kPresets[i % civ_preset_count()]; }
-int civ_preset_count() { return static_cast<int>(sizeof(kPresets) / sizeof(kPresets[0])); }
 const char *player_city_name(int i) { return kPlayerCities[i % static_cast<int>(sizeof(kPlayerCities) / sizeof(kPlayerCities[0]))]; }
 
 // ---------------------------------------------------------------- setup
@@ -67,28 +49,32 @@ Game Game::create(const GameSettings &s)
     g.map = generate_map(ms);
     const int n = std::clamp(s.civs, 2, kMaxCivs);
     g.civs.resize(n);
-    // The player is civ 0; computer players take presets in a shuffled order.
-    std::vector<int> order;
-    for (int i = 0; i < civ_preset_count(); ++i) {
-        order.push_back(i);
+    // The player is civ 0. The computer players take the other colours in a
+    // shuffled order, each one of the two peoples of its colour.
+    const int player_slot = s.player_tribe >= 0 ? tribe_info(s.player_tribe).slot : -1;
+    std::vector<int> slots;
+    for (int k = 0; k < kTribeSlots; ++k) {
+        if (k == player_slot || (player_slot < 0 && tribe_info(k).color == s.player_color)) continue;
+        slots.push_back(k);
     }
-    for (int i = static_cast<int>(order.size()) - 1; i > 0; --i) {
-        std::swap(order[i], order[g.rng.below(i + 1)]);
+    for (int i = static_cast<int>(slots.size()) - 1; i > 0; --i) {
+        std::swap(slots[i], slots[g.rng.below(i + 1)]);
     }
     for (int i = 0; i < n; ++i) {
         Civ &c = g.civs[i];
         if (i == 0) {
-            c.name = s.player_name;
-            c.leader = s.player_leader;
-            c.color = s.player_color;
             c.ai = s.all_ai;
+            if (s.player_tribe >= 0) {
+                g.set_tribe(0, s.player_tribe);
+            } else {
+                c.name = s.player_name;
+                c.leader = s.player_leader;
+                c.color = s.player_color;
+            }
         } else {
-            int p = order[(i - 1) % order.size()];
-            c.name = kPresets[p].name;
-            c.leader = kPresets[p].leader;
-            c.color = kPresets[p].color == s.player_color ? 0 : kPresets[p].color;
+            const int slot = slots[static_cast<size_t>(i - 1) % slots.size()];
+            g.set_tribe(i, slot + (g.rng.below(2) ? kTribeSlots : 0));
             c.ai = true;
-            c.name_next = (p + 1) * 100; // remembers the preset
         }
         c.gold = 50;
     }
@@ -152,6 +138,17 @@ Game Game::create(const GameSettings &s)
     g.refresh_visibility();
     g.say(0, MsgKind::Info, "Your people, the " + g.civs[0].name + ", await your command, " + g.civs[0].leader + ".");
     return g;
+}
+
+void Game::set_tribe(int ci, int t)
+{
+    Civ &c = civs[ci];
+    const TribeInfo &ti = tribe_info(t);
+    c.tribe = t;
+    c.name = ti.name;
+    c.leader = ti.leader;
+    c.color = ti.color;
+    c.name_next = 0;
 }
 
 // ---------------------------------------------------------------- lookups
@@ -499,7 +496,19 @@ void Game::learn(int civ, Advance a)
     if (a == Advance::FutureTech) {
         civs[civ].future++;
     } else {
+        const bool first = !civs[civ].techs[static_cast<int>(a)];
         civs[civ].techs[static_cast<int>(a)] = true;
+        // DOS: Gunpowder and Combustion make existing Barracks obsolete.
+        if (first && (a == Advance::Gunpowder || a == Advance::Combustion)) {
+            bool any = false;
+            for (City &c : cities) {
+                if (c.owner == civ && c.has(Building::Barracks)) {
+                    c.remove(Building::Barracks);
+                    any = true;
+                }
+            }
+            if (any) say(civ, MsgKind::Info, std::string("Development of ") + advance_info(a).name + " makes existing Barracks obsolete.");
+        }
     }
     if (civs[civ].research == a) {
         civs[civ].research = Advance::None;
@@ -558,7 +567,7 @@ bool Game::can_build(const City &c, bool is_unit, int what) const
 
 // ---------------------------------------------------------------- yields
 
-Yield Game::tile_yield(int x, int y, int civ, bool centre) const
+Yield Game::tile_yield(int x, int y, int civ, bool centre, bool celebrating) const
 {
     if (!map.valid_y(y)) return {};
     const Tile &t = map.at(x, y);
@@ -569,11 +578,16 @@ Yield Game::tile_yield(int x, int y, int civ, bool centre) const
     if (t.mine) v.shields += ti.mine_shields;
     if (t.road || centre) v.trade += ti.road_trade;
     const Government g = civ >= 0 && civ < static_cast<int>(civs.size()) ? civs[civ].govt : Government::Despotism;
-    if (g == Government::Despotism || g == Government::Anarchy) {
+    // DOS CityWorker.cs (resource count per square): Anarchy and Despotism
+    // lose one from any yield over 2 unless the city celebrates; a Republic
+    // or Democracy adds one trade where there is trade, and so do Monarchy
+    // and Communism while the city celebrates "We Love the King Day".
+    if ((g == Government::Despotism || g == Government::Anarchy) && !celebrating) {
         if (v.food >= 3) v.food -= 1;
         if (v.shields >= 3) v.shields -= 1;
         if (v.trade >= 3) v.trade -= 1;
-    } else if (g == Government::Republic || g == Government::Democracy) {
+    } else if (g == Government::Republic || g == Government::Democracy ||
+               (celebrating && (g == Government::Monarchy || g == Government::Communism))) {
         if (v.trade >= 1) v.trade += 1;
     }
     if (centre) v.shields = std::max(1, v.shields);
@@ -658,10 +672,10 @@ void Game::update_city(City &c)
     for (int pass = 0; pass < 12; ++pass) {
         CityStats s;
         const bool colossus = wonder_in(c, Wonder::Colossus);
-        Yield raw = tile_yield(c.x, c.y, c.owner, true);
+        Yield raw = tile_yield(c.x, c.y, c.owner, true, c.celebrating);
         if (colossus && raw.trade > 0) raw.trade++;
         for (const auto &w : c.worked) {
-            const Yield y = tile_yield(c.x + w.first, c.y + w.second, c.owner, false);
+            const Yield y = tile_yield(c.x + w.first, c.y + w.second, c.owner, false, c.celebrating);
             raw.food += y.food;
             raw.shields += y.shields;
             raw.trade += y.trade + (colossus && y.trade > 0 ? 1 : 0);
@@ -737,7 +751,7 @@ void Game::update_city(City &c)
         s.sci = sci;
         // Happiness.
         const int workers = c.size - c.specialists();
-        int content = std::min(workers, content_base(difficulty));
+        int content = std::clamp(content_base(difficulty) - empire_unhappy(c), 0, workers);
         int unhappy = workers - content;
         int happy = 0;
         int l = lux;
@@ -846,12 +860,74 @@ int Game::production_cost(const City &c) const
 
 int Game::buy_cost(const City &c) const
 {
-    const int left = std::max(0, production_cost(c) - c.shields);
+    // DOS CityWorker.cs, the city screen's Buy: r = shields left (0..999).
+    const int left = std::clamp(production_cost(c) - c.shields, 0, 999);
     if (left == 0) return 0;
-    int cost = 2 * left + left * left / 20;
+    int cost;
+    if (c.build_unit) cost = left * left / 20 + 2 * left;
+    else if (is_wonder_build(c.build) || is_space_build(c.build)) cost = 4 * left;
+    else cost = 2 * left;
     if (c.shields == 0) cost *= 2;
-    if (c.build_unit) cost = cost * 2; // units cost more to rush
     return cost;
+}
+
+int Game::empire_size_step(int civ) const
+{
+    // DOS: (government / 2 + 2) x ((14 - 2 x level) / 2), government
+    // numbered Anarchy 0 .. Democracy 5, level Chieftain 0 .. Emperor 4.
+    const int lv = static_cast<int>(difficulty);
+    const int g = static_cast<int>(civs[civ].govt);
+    return (g / 2 + 2) * ((14 - 2 * lv) / 2);
+}
+
+int Game::empire_unhappy(const City &c) const
+{
+    // Only human rulers feel it (computer rulers' cities have their own rule).
+    if (c.owner < 0 || c.owner >= static_cast<int>(civs.size()) || civs[c.owner].ai) return 0;
+    const int r = std::max(1, empire_size_step(c.owner));
+    int n = 0;
+    for (const City &o : cities) n += o.owner == c.owner;
+    return std::max(0, ((c.id % r) + n - r) / r);
+}
+
+bool Game::celebration_due(const City &c) const
+{
+    if (civs[c.owner].govt == Government::Anarchy) return false;
+    return c.stats.unhappy == 0 && c.size > 2 && (c.size + 1) / 2 <= c.stats.happy;
+}
+
+int Game::building_upkeep(int civ, int b) const
+{
+    if (b < 0 || b >= kBuildingCount) return 0;
+    int up = building_info(b).upkeep;
+    if (b == static_cast<int>(Building::Barracks)) {
+        const int lv = static_cast<int>(difficulty);
+        if (lv >= 2) ++up;
+        if (lv >= 4) ++up;
+        if (has(civ, Advance::Gunpowder)) ++up;
+        if (has(civ, Advance::Combustion)) ++up;
+    }
+    return up;
+}
+
+bool Game::can_sell(const City &c, int b) const
+{
+    return !c.sold && b > 0 && b < kBuildingCount && b != static_cast<int>(Building::Palace) && c.has(static_cast<Building>(b));
+}
+
+bool Game::sell_building(int city_id, int b)
+{
+    City *c = city(city_id);
+    if (!c || !can_sell(*c, b)) return false;
+    // DOS: "Do you want to sell your X for N coins?" -- N is its cost.
+    const int value = building_info(b).cost;
+    c->remove(static_cast<Building>(b));
+    c->sold = true;
+    civs[c->owner].gold += value;
+    say(c->owner, MsgKind::Info, std::string("The ") + building_info(b).name + " in " + c->name + " is sold for " + std::to_string(value) + " gold.",
+        c->x, c->y);
+    update_city(*c);
+    return true;
 }
 
 // ---------------------------------------------------------------- space race
@@ -1581,8 +1657,8 @@ bool Game::can_enter(const Unit &u, int tx, int ty) const
         }
         return false;
     case Domain::Sea:
+        // A Trireme may put out to sea, at a risk (triremes_at_sea).
         if (!ocean) return c && c->owner == u.owner;
-        if ((i.flags & kCoastal) && !map.next_to_land(tx, ty)) return false;
         return true;
     case Domain::Air: return true;
     }
@@ -1643,7 +1719,14 @@ MoveResult Game::move(int unit_id, int dx, int dy)
         if (u->type == UnitType::Diplomat && (city_at(tx, ty) || units_at(tx, ty).size() == 1)) return MoveResult::Diplomat;
         if (u->type == UnitType::Caravan && city_at(tx, ty)) return MoveResult::Caravan;
         if (!at_war(u->owner, other)) return MoveResult::NeedWar;
+        if (i.flags & kNuclear) return nuke(unit_id, tx, ty);
         const bool has_units = !units_at(tx, ty).empty();
+        if (has_units && !city_at(tx, ty) && u->type != UnitType::Fighter) {
+            // DOS: only FIGHTER units may attack AIR units (outside a city).
+            bool air = true;
+            for (int id : units_at(tx, ty)) air = air && unit_info(unit(id)->type).domain == Domain::Air;
+            if (air) return MoveResult::FighterOnly;
+        }
         if (has_units) {
             if (i.attack <= 0) return MoveResult::Blocked;
             if (i.domain == Domain::Land && map.ocean(tx, ty)) return MoveResult::Blocked;
@@ -1716,6 +1799,261 @@ MoveResult Game::move(int unit_id, int dx, int dy)
     return result;
 }
 
+const City *Game::sdi_cover(int attacker, int tx, int ty) const
+{
+    for (const City &c : cities) {
+        if (c.owner != attacker && c.has(Building::SdiDefense) && map.distance(c.x, c.y, tx, ty) <= 3) return &c;
+    }
+    return nullptr;
+}
+
+MoveResult Game::nuke(int unit_id, int tx, int ty)
+{
+    Unit *n = unit(unit_id);
+    if (!n) return MoveResult::Failed;
+    const int me = n->owner;
+    tx = map.wrap_x(tx);
+    const int victim = owner_at(tx, ty);
+    if (victim >= 0 && victim != me && !at_war(me, victim)) declare_war(me, victim);
+    kill_unit(unit_id);   // the missile is spent either way
+    if (const City *sdi = sdi_cover(me, tx, ty)) {
+        say(me, MsgKind::Bad, "SDI Defense in " + sdi->name + " shoots down your Nuclear missile.", tx, ty);
+        say(sdi->owner, MsgKind::Good, "SDI Defense protects " + sdi->name + ": a " + civs[me].name + " Nuclear missile is destroyed.", tx, ty);
+        last_combat = CombatResult();
+        return MoveResult::Nuked;
+    }
+    // DOS AttackActions.cs: the target and the eight squares around it.
+    int killed = 0, people = 0;
+    std::uint32_t hit = 0;
+    for (int j = -1; j <= 1; ++j) {
+        for (int i = -1; i <= 1; ++i) {
+            const int x = map.wrap_x(tx + i), y = ty + j;
+            if (!map.valid_y(y)) continue;
+            std::vector<int> ids = units_at(x, y);
+            for (int id : ids) {
+                if (const Unit *v = unit(id)) {
+                    hit |= 1u << v->owner;
+                    ++killed;
+                }
+                kill_unit(id);
+            }
+            if (City *c = city_at(x, y)) {
+                hit |= 1u << c->owner;
+                const int lost = c->size / 2;
+                c->size -= lost;
+                people += lost;
+                c->food = std::min(c->food, food_box(*c));
+            }
+        }
+    }
+    for (City &c : cities) {
+        if (map.distance(c.x, c.y, tx, ty) <= 1) update_city(c);
+    }
+    const std::string what = std::to_string(killed) + (killed == 1 ? " unit" : " units") + " destroyed, " + std::to_string(people) +
+                             (people == 1 ? " citizen" : " citizens") + " lost.";
+    for (int k = 0; k < static_cast<int>(civs.size()); ++k) {
+        if (k == me) continue;
+        if ((hit >> k) & 1u) {
+            say(k, MsgKind::Bad, "The " + civs[me].name + " use nuclear weapons! " + what, tx, ty);
+            civs[k].vendetta |= static_cast<std::uint8_t>(1u << me);
+        }
+    }
+    say(me, MsgKind::Combat, "Nuclear blast: " + what, tx, ty);
+    last_combat = CombatResult();
+    check_elimination();
+    return MoveResult::Nuked;
+}
+
+void Game::triremes_at_sea(int ci)
+{
+    if (civs[ci].ai) return;   // DOS: the human player's Triremes only
+    std::vector<int> lost;
+    for (const Unit &u : units) {
+        if (u.owner != ci || !(unit_info(u.type).flags & kCoastal) || !map.ocean(u.x, u.y)) continue;
+        if (map.next_to_land(u.x, u.y)) continue;
+        if (rng.below(2) != 0) lost.push_back(u.id);
+    }
+    for (int id : lost) {
+        const Unit *u = unit(id);
+        const int x = u->x, y = u->y;
+        std::vector<int> aboard;
+        for (const Unit &c : units) {
+            if (c.carried_by == id) aboard.push_back(c.id);
+        }
+        for (int c : aboard) kill_unit(c);
+        kill_unit(id);
+        say(ci, MsgKind::Bad, "Your Trireme has been lost at sea, far from any coast.", x, y);
+    }
+}
+
+bool Game::can_pillage(const Unit &u) const
+{
+    if (u.moves <= 0 || unit_info(u.type).domain != Domain::Land) return false;
+    if (u.type == UnitType::Diplomat || u.type == UnitType::Caravan || (unit_info(u.type).flags & kNoBuild)) return false;
+    if (city_at(u.x, u.y)) return false;
+    const Tile &t = map.at(u.x, u.y);
+    if (!(t.mine || t.irrigation || t.road || t.railroad)) return false;
+    // Not on land a city at peace with us works.
+    for (const City &c : cities) {
+        if (c.owner == u.owner || at_war(u.owner, c.owner)) continue;
+        for (const auto &w : c.worked) {
+            if (map.wrap_x(c.x + w.first) == u.x && c.y + w.second == u.y) return false;
+        }
+    }
+    return true;
+}
+
+bool Game::pillage(int unit_id)
+{
+    Unit *u = unit(unit_id);
+    if (!u || !can_pillage(*u)) return false;
+    Tile &t = map.at(u->x, u->y);
+    std::string what;
+    if (t.mine || t.irrigation) {
+        what = t.mine ? "mine" : "irrigation";
+        t.mine = t.irrigation = false;
+    } else if (t.railroad) {
+        what = "railroad";
+        t.railroad = false;
+    } else {
+        what = "road";
+        t.road = false;
+    }
+    u->moves = 0;
+    u->order = Order::None;
+    say(u->owner, MsgKind::Info, "Your " + std::string(unit_info(u->type).name) + " pillages the " + what + ".", u->x, u->y);
+    for (City &c : cities) {
+        if (map.distance(c.x, c.y, u->x, u->y) <= 2) update_city(c);
+    }
+    return true;
+}
+
+bool Game::set_home_city(int unit_id)
+{
+    Unit *u = unit(unit_id);
+    if (!u) return false;
+    const City *c = city_at(u->x, u->y);
+    if (!c || c->owner != u->owner || c->id == u->home) return false;
+    const int old = u->home;
+    u->home = c->id;
+    if (City *o = city(old)) update_city(*o);
+    update_city(*city(c->id));
+    say(u->owner, MsgKind::Info, "Your " + std::string(unit_info(u->type).name) + " now has its home in " + c->name + ".", u->x, u->y);
+    return true;
+}
+
+int Game::unload(int ship_id)
+{
+    int n = 0;
+    for (Unit &c : units) {
+        if (c.carried_by == ship_id && c.order == Order::Sentry) {
+            c.order = Order::None;
+            c.done = false;
+            ++n;
+        }
+    }
+    return n;
+}
+
+bool Game::disaster(City &c, Disaster d)
+{
+    // DOS GameEngine.cs GenerateCityDisaster: each needs the land around
+    // the city (its nine squares) and strikes only a city without the
+    // building that guards against it, once the owner can build that.
+    bool hills = false, river = false, mountains = false, sea = false;
+    for (int j = -1; j <= 1; ++j) {
+        for (int i = -1; i <= 1; ++i) {
+            if (!map.valid_y(c.y + j)) continue;
+            const Terrain t = map.at(c.x + i, c.y + j).terrain;
+            hills |= t == Terrain::Hills;
+            river |= t == Terrain::River;
+            mountains |= t == Terrain::Mountains;
+            sea |= t == Terrain::Ocean;
+        }
+    }
+    auto knows_for = [&](Building b) { return has(c.owner, building_info(b).tech); };
+    auto random_building = [&]() {
+        std::vector<int> have;
+        for (int b = 1; b < kBuildingCount; ++b) {
+            if (c.has(static_cast<Building>(b))) have.push_back(b);
+        }
+        return have.empty() ? -1 : have[rng.below(static_cast<int>(have.size()))];
+    };
+    std::string head, tail;
+    switch (d) {
+    case Disaster::Earthquake: {
+        if (!hills) return false;
+        const int b = random_building();
+        if (b < 0) return false;
+        c.remove(static_cast<Building>(b));
+        head = "Earthquake in " + c.name + "!";
+        tail = std::string(building_info(b).name) + " destroyed.";
+        break;
+    }
+    case Disaster::Plague:
+        if (has(c.owner, Advance::Medicine) || !knows_for(Building::Aqueduct) || c.has(Building::Aqueduct)) return false;
+        c.size -= c.size / 4;
+        head = "Plague in " + c.name + "!";
+        tail = "Scores perish. Citizens demand an Aqueduct.";
+        break;
+    case Disaster::Flood:
+        if (!river || !knows_for(Building::CityWalls) || c.has(Building::CityWalls)) return false;
+        if (c.size > 1) c.size -= c.size / 4;
+        head = "Floods strike " + c.name + "!";
+        tail = "Houses washed away. Citizens demand City Walls.";
+        break;
+    case Disaster::Volcano:
+        if (!mountains || !knows_for(Building::Temple) || c.has(Building::Temple)) return false;
+        if (c.size > 1) c.size -= c.size / 3;
+        head = "Volcano erupts near " + c.name + "!";
+        tail = "Citizens flee in terror. Citizens demand a Temple.";
+        break;
+    case Disaster::Famine:
+        if (!knows_for(Building::Granary) || c.has(Building::Granary)) return false;
+        c.food = 0;
+        c.size -= c.size / 3;
+        head = "Famine strikes " + c.name + "!";
+        tail = "Scores perish. Citizens demand a Granary.";
+        break;
+    case Disaster::Fire: {
+        if (!knows_for(Building::Aqueduct) || c.has(Building::Aqueduct)) return false;
+        const int b = random_building();
+        if (b < 0) return false;
+        c.remove(static_cast<Building>(b));
+        head = "Fire sweeps through " + c.name + "!";
+        tail = std::string(building_info(b).name) + " destroyed. Citizens demand an Aqueduct.";
+        break;
+    }
+    case Disaster::Pirates:
+        if (!sea || c.has(Building::Barracks)) return false;
+        c.food = 0;
+        c.shields = 0;
+        head = "Pirates plunder " + c.name + "!";
+        tail = "Production halted, food stolen. Citizens demand Barracks.";
+        break;
+    default: return false;
+    }
+    c.size = std::max(1, c.size);
+    update_city(c);
+    say(c.owner, MsgKind::Bad, head + " " + tail, c.x, c.y);
+    return true;
+}
+
+void Game::natural_disasters()
+{
+    if (turn <= 50) return;
+    for (int k = 0; k < 2; ++k) {
+        const int slot = rng.below(128);
+        const int kind = rng.below(10);   // 7..9: unrest, not modelled (no effect of its own)
+        if (slot >= static_cast<int>(cities.size())) continue;
+        City &c = cities[static_cast<size_t>(slot)];
+        int owned = 0;
+        for (const City &o : cities) owned += o.owner == c.owner;
+        if (owned <= 1 || c.size < 5 || kind >= static_cast<int>(Disaster::Count)) continue;
+        disaster(c, static_cast<Disaster>(kind));
+    }
+}
+
 void Game::enter_hut(Unit &u)
 {
     Tile &t = map.at(u.x, u.y);
@@ -1773,12 +2111,42 @@ void Game::capture_city(City &c, int new_owner)
         lose_spaceship(old, civs[old].launch_turn >= 0);
     }
     c.remove(Building::Palace);
+    // DOS Actions.cs CityTakeover: the city loses one size; a size-1 city
+    // is destroyed. The conqueror takes an advance the loser knew.
+    if (!civs[new_owner].barbarian && !civs[old].barbarian) {
+        const Advance a = capture_tech(new_owner, old);
+        if (a != Advance::None) {
+            learn(new_owner, a);
+            say(new_owner, MsgKind::Tech, std::string("In ") + c.name + " your scholars find the secret of " + advance_info(a).name + ".", c.x, c.y);
+        }
+    }
+    if (c.size <= 1) {
+        const int id = c.id;
+        const std::string name = c.name;
+        const int cx = c.x, cy = c.y;
+        std::vector<int> drop;
+        for (const Unit &u : units) {
+            if (u.home == id) drop.push_back(u.id);
+        }
+        for (int uid : drop) kill_unit(uid);
+        for (int &w : wonder_city) {
+            if (w == id) w = -2;
+        }
+        say(new_owner, MsgKind::Good, "You destroy " + name + ". Plunder: " + std::to_string(plunder) + " gold.", cx, cy);
+        say(old, MsgKind::Bad, name + " is destroyed by the " + civs[new_owner].name + ".", cx, cy);
+        for (City &o : cities) o.routes.erase(std::remove(o.routes.begin(), o.routes.end(), id), o.routes.end());
+        cities.erase(std::remove_if(cities.begin(), cities.end(), [id](const City &o) { return o.id == id; }), cities.end());
+        check_elimination();
+        return;
+    }
     c.owner = new_owner;
     c.manual = false;
     c.shields = 0;
+    c.celebrating = false;
+    c.disorder_turns = 0;
     c.build_unit = true;
     c.build = static_cast<int>(UnitType::Militia);
-    if (c.size > 1) c.size--;
+    c.size--;
     // Units the city supported for the old owner are disbanded.
     std::vector<int> drop;
     for (const Unit &u : units) {
@@ -1790,6 +2158,34 @@ void Game::capture_city(City &c, int new_owner)
     update_city(c);
     reveal(new_owner, c.x, c.y, 2);
     check_elimination();
+}
+
+Advance Game::capture_tech(int winner, int loser) const
+{
+    // DOS takes the advance with the highest "grade"; here the one with the
+    // longest chain of prerequisites (ties to the later in the table).
+    std::array<int, kAdvanceCount> depth{};
+    std::function<int(int)> grade = [&](int a) -> int {
+        if (a < 0 || a >= kAdvanceCount) return 0;
+        if (depth[a]) return depth[a];
+        const AdvanceInfo &i = advance_info(a);
+        int d = 1;
+        if (i.req1 != Advance::None) d = std::max(d, 1 + grade(static_cast<int>(i.req1)));
+        if (i.req2 != Advance::None) d = std::max(d, 1 + grade(static_cast<int>(i.req2)));
+        depth[a] = d;
+        return d;
+    };
+    int best = -1, best_d = -1;
+    for (int a = 0; a < kAdvanceCount; ++a) {
+        if (a == static_cast<int>(Advance::FutureTech)) continue;
+        if (!civs[loser].techs[a] || civs[winner].techs[a]) continue;
+        const int d = grade(a);
+        if (d >= best_d) {
+            best_d = d;
+            best = a;
+        }
+    }
+    return best < 0 ? Advance::None : static_cast<Advance>(best);
 }
 
 void Game::set_goto(int unit_id, int x, int y)
@@ -2012,16 +2408,15 @@ std::string Game::next_city_name(int civ)
 {
     Civ &c = civs[civ];
     std::string name;
-    if (civ == 0 || c.name_next < 100) {
+    if (c.tribe < 0) {
         // The player's civ (or a preset-less one) uses the player list.
         const int n = c.name_next % 100;
         name = player_city_name(n);
         if (n >= 24) name += " " + std::to_string(n / 24 + 1);
         c.name_next++;
     } else {
-        const int preset = c.name_next / 100 - 1;
-        const int n = c.name_next % 100;
-        name = kPresets[preset].cities[n % 16];
+        const int n = c.name_next;
+        name = tribe_info(c.tribe).cities[n % 16];
         if (n >= 16) name = "New " + name;
         c.name_next++;
     }
@@ -2123,6 +2518,27 @@ void Game::set_rates(int civ, int tax, int lux, int sci)
     }
 }
 
+int Game::anarchy_turns(int civ) const
+{
+    // DOS Diplomacy.cs: Anarchy ends at the first turn divisible by 4 (one
+    // to four turns), or after one turn with the Pyramids.
+    if (wonder_active(civ, Wonder::Pyramids)) return 1;
+    const int r = turn % 4;
+    return r == 0 ? 4 : 4 - r;
+}
+
+const char *Game::leader_title(int civ) const
+{
+    switch (civs[civ].govt) {
+    case Government::Despotism: return "Despot";
+    case Government::Monarchy: return "King";
+    case Government::Communism: return "Comrade";
+    case Government::Republic: return "Consul";
+    case Government::Democracy: return "President";
+    default: return "Leader";
+    }
+}
+
 void Game::revolution(int civ, Government g)
 {
     Civ &c = civs[civ];
@@ -2130,7 +2546,7 @@ void Game::revolution(int civ, Government g)
     if (!pyramids && !has(civ, government_info(g).tech)) return;
     c.target = g;
     c.govt = Government::Anarchy;
-    c.anarchy = pyramids ? 1 : 2;
+    c.anarchy = anarchy_turns(civ);
     say(civ, MsgKind::Bad, "Revolution! The " + c.name + " fall into Anarchy.");
     for (City &ct : cities) {
         if (ct.owner == civ) update_city(ct);
@@ -2323,12 +2739,48 @@ void Game::process_city(City &c, bool &learned_any)
     update_city(c);
     Civ &civ = civs[c.owner];
     const CityStats s = c.stats;
+    c.sold = false;
     if (s.disorder) {
         say(c.owner, MsgKind::Bad, "Civil disorder in " + c.name + "!", c.x, c.y);
+        ++c.disorder_turns;
+        // DOS: a Democracy whose city is still in disorder a second turn
+        // collapses into Anarchy.
+        if (c.disorder_turns >= 2 && civ.govt == Government::Democracy) {
+            say(c.owner, MsgKind::Bad, "Discontented citizens of " + c.name + " revolt: the government collapses!", c.x, c.y);
+            civ.target = Government::Democracy;
+            civ.govt = Government::Anarchy;
+            civ.anarchy = anarchy_turns(c.owner);
+            for (City &o : cities) {
+                if (o.owner == c.owner) o.disorder_turns = 0;
+            }
+        }
+    } else {
+        if (c.disorder_turns > 0 && !civ.ai) say(c.owner, MsgKind::Good, "Order restored in " + c.name + ".", c.x, c.y);
+        c.disorder_turns = 0;
+    }
+    // We Love the King Day (DOS CityWorker.cs): starts when the city
+    // qualifies, and while it lasts a Republic or Democracy grows by one
+    // each turn it has spare food; it ends when the city no longer does.
+    bool rapture = false;
+    if (celebration_due(c)) {
+        if (!c.celebrating) {
+            c.celebrating = true;
+            say(c.owner, MsgKind::Good, std::string("'We Love the ") + leader_title(c.owner) + "' Day celebrated in " + c.name + "!", c.x, c.y);
+        } else if ((civ.govt == Government::Republic || civ.govt == Government::Democracy) && s.food_surplus > 0 && c.size < size_cap(c)) {
+            rapture = true;
+        }
+    } else if (c.celebrating && !s.disorder) {
+        c.celebrating = false;
+        say(c.owner, MsgKind::Info, "The celebration in " + c.name + " is over.", c.x, c.y);
+    } else if (s.disorder) {
+        c.celebrating = false;
     }
     // Food.
     c.food += s.food_surplus;
-    if (c.food >= s.food_box) {
+    if (rapture) {
+        c.size++;
+        say(c.owner, MsgKind::City, c.name + " celebrates and grows to size " + std::to_string(c.size) + ".", c.x, c.y);
+    } else if (c.food >= s.food_box) {
         if (c.size < size_cap(c)) {
             c.size++;
             c.food = c.has(Building::Granary) ? food_box(c) / 2 : 0;
@@ -2490,6 +2942,7 @@ void Game::start_turn_for(int ci)
 {
     Civ &civ = civs[ci];
     if (!civ.alive) return;
+    triremes_at_sea(ci);
     if (civ.govt == Government::Anarchy) {
         if (--civ.anarchy <= 0) {
             civ.govt = civ.target == Government::Anarchy ? Government::Despotism : civ.target;
@@ -2508,12 +2961,15 @@ void Game::start_turn_for(int ci)
     for (int id : ids) {
         if (City *c = city(id)) process_city(*c, learned);
     }
+    for (int id : ids) {
+        if (City *c = city(id)) update_city(*c);   // new sizes and celebrations show at once
+    }
     // Upkeep of buildings, paid in gold.
     int upkeep = 0;
     for (const City &c : cities) {
         if (c.owner != ci) continue;
         for (int b = 0; b < kBuildingCount; ++b) {
-            if (c.has(static_cast<Building>(b))) upkeep += building_info(b).upkeep;
+            if (c.has(static_cast<Building>(b))) upkeep += building_upkeep(ci, b);
         }
     }
     civ.gold -= upkeep;
@@ -2666,6 +3122,7 @@ void Game::new_turn()
     }
     update_tech_catchup();
     for (int c = 0; c < static_cast<int>(civs.size()); ++c) start_turn_for(c);
+    natural_disasters();
     spawn_barbarians();
     space_arrivals();
     check_elimination();

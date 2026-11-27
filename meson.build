@@ -17,6 +17,7 @@ civcore = static_library(
     'src/core/game.cpp',
     'src/core/ai.cpp',
     'src/core/save.cpp',
+    'src/core/tribes.cpp',
   ),
   include_directories: civcore_inc,
 )

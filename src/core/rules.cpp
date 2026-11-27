@@ -124,7 +124,7 @@ const UnitInfo kUnits[kUnitTypeCount] = {
     {"Battleship", D::Sea, 18, 12, 4, 160, A::Steel, A::None, kSight2, 0, 0},
     {"Carrier", D::Sea, 1, 12, 5, 160, A::AdvancedFlight, A::None, kSight2 | kCarriesAir, 8, 0},
     {"Submarine", D::Sea, 8, 2, 3, 50, A::MassProduction, A::None, kSight2 | kNoLandAttack, 0, 0},
-    {"Fighter", D::Air, 4, 2, 10, 60, A::Flight, A::None, 0, 0, 1},
+    {"Fighter", D::Air, 4, 2, 10, 60, A::Flight, A::None, kSight2, 0, 1},
     {"Bomber", D::Air, 12, 1, 8, 120, A::AdvancedFlight, A::None, kIgnoreWalls | kSight2, 0, 2},
     {"Nuclear", D::Air, 99, 0, 16, 160, A::Rocketry, A::None, kNuclear | kIgnoreZoc, 0, 1},
     {"Barbarian Leader", D::Land, 0, 0, 1, 10, A::None, A::None, kNonMilitary | kNoBuild | kIgnoreZoc, 0, 0},
