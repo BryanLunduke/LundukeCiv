@@ -269,6 +269,24 @@ struct Attitude {
     int tribute = 0;       // gold it would ask, in 50s
 };
 
+// The Civilization Score (DOS): every citizen counts, twice when happy and
+// not at all when unhappy (worked out as if luxuries were at 40%); 20 for
+// each Wonder of the World; 3 for each turn of world peace in AD, at most
+// 100; 5 for each Future Technology; and the colonists' share when the
+// spaceship lands. A conquest scores at least the conqueror's bonus.
+struct ScoreBreakdown {
+    int citizens = 0;       // size + happy - unhappy, summed over the cities
+    int happy = 0, content = 0, unhappy = 0, specialists = 0;
+    int wonders = 0;        // how many
+    int wonder_points = 0;  // 20 each
+    int peace = 0;
+    int future = 0;
+    int spaceship = 0;      // points the colonists bring (0 unless landed)
+    int spaceship_possible = 0;  // what a ship in flight would bring
+    int bonus = -1;         // conquest bonus, -1 none
+    int total = 0;
+};
+
 // A proposal the player makes in Foreign Affairs.
 enum class Proposal : std::uint8_t { Ceasefire, Peace, Embassy, CancelTreaty };
 
@@ -300,6 +318,14 @@ public:
     // every 50 turns once the calendar reaches AD: the most advances any
     // civilization knows, less the turn / 9.
     int tech_catchup = 0;
+    // --- the end of the game (DOS)
+    // Turns (the human's, in AD) since two peoples last fought: world peace
+    // for the Civilization Score.
+    int peace_turns = 0;
+    bool game_ended = false;   // 2100 AD came or the ruler retired: the score is final
+    bool retired = false;
+    int end_turn_number = 0;   // the turn the game ended on (0 not yet)
+    int opponents = 0;         // computer rivals at the start, for the conquest bonus
 
     Game() { wonder_city.fill(-1); }
 
@@ -415,6 +441,21 @@ public:
     // peace offered, and will not break a treaty.
     bool senate(int civ) const;
     bool senate_blocks(int a, int b) const { return senate(a) && has_treaty(a, b); }
+
+    // --- the Civilization Score, the end in 2100 AD and retirement
+    static constexpr int kEndYear = 2100;          // DOS: 2100 less 20 a level; here 2100 on every level
+    static constexpr int kRetireWarningYears = 20; // "plans retirement in 20 years"
+    static constexpr int kWonderPoints = 20;
+    static constexpr int kFuturePoints = 5;
+    static constexpr int kPeacePerTurn = 3;
+    static constexpr int kPeaceMax = 100;
+    ScoreBreakdown score(int civ);                 // works the cities out at 40% luxuries, then puts them back
+    long long population(int civ) const;          // as the DOS game counts people
+    void retire();                                 // the ruler steps down: the game ends now
+    // No more turns: retired, conquered, destroyed or flown to the stars.
+    // After 2100 AD the ruler may keep playing; the Hall of Fame keeps the
+    // score the game ended with.
+    bool over() const { return retired || winner >= 0 || human_dead; }
 
     // --- diplomacy (DOS MeetWithKing, approximated: see README)
     Attitude attitude(int ai, int other) const;

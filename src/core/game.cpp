@@ -139,6 +139,8 @@ Game Game::create(const GameSettings &s)
         b.gold = 0;
         g.civs.push_back(b);   // at_war() is always true against them
     }
+    for (const Civ &c : g.civs) g.opponents += c.ai && !c.barbarian;
+    if (s.all_ai) g.opponents = std::max(0, g.opponents - 1);
     g.refresh_visibility();
     g.say(0, MsgKind::Info, "Your people, the " + g.civs[0].name + ", await your command, " + g.civs[0].leader + ".");
     return g;
@@ -1583,6 +1585,8 @@ MoveResult Game::attack(int unit_id, int tx, int ty)
     Unit *d = unit(best);
     const int att_owner = a->owner, def_owner = d->owner;
     if (!at_war(att_owner, def_owner)) declare_war(att_owner, def_owner);
+    // DOS: any fight between two peoples (raiders aside) ends world peace.
+    if (!civs[att_owner].barbarian && !civs[def_owner].barbarian) peace_turns = 0;
     CombatResult r;
     r.happened = true;
     r.att_type = a->type;
@@ -1824,6 +1828,7 @@ MoveResult Game::nuke(int unit_id, int tx, int ty)
     tx = map.wrap_x(tx);
     const int victim = owner_at(tx, ty);
     if (victim >= 0 && victim != me && !at_war(me, victim)) declare_war(me, victim);
+    if (victim >= 0 && victim != me && !civs[victim].barbarian && !civs[me].barbarian) peace_turns = 0;
     kill_unit(unit_id);   // the missile is spent either way
     if (const City *sdi = sdi_cover(me, tx, ty)) {
         say(me, MsgKind::Bad, "SDI Defense in " + sdi->name + " shoots down your Nuclear missile.", tx, ty);
@@ -3138,6 +3143,8 @@ void Game::new_turn()
         for (Civ &c : civs) c.bulbs *= 2;
     }
     update_tech_catchup();
+    // World peace counts in AD, a turn at a time (DOS: at the human's turn).
+    if (year_for_turn(turn) > 0 && human >= 0 && human < static_cast<int>(civs.size()) && civs[human].alive) ++peace_turns;
     for (int c = 0; c < static_cast<int>(civs.size()); ++c) start_turn_for(c);
     natural_disasters();
     ceasefires_end();
@@ -3145,6 +3152,20 @@ void Game::new_turn()
     space_arrivals();
     check_elimination();
     refresh_visibility();
+    // The end of history: a warning 20 years ahead, then the final score.
+    if (!game_ended && !over() && human >= 0 && human < static_cast<int>(civs.size())) {
+        const int was = year_for_turn(turn - 1), now = year_for_turn(turn);
+        const int warn = kEndYear - kRetireWarningYears;
+        const std::string ruler = std::string(leader_title(human)) + " " + civs[human].leader;
+        if (was < warn && now >= warn && now < kEndYear)
+            say(human, MsgKind::Info, ruler + " plans to retire in " + std::to_string(kEndYear - now) + " years.");
+        if (now >= kEndYear) {
+            game_ended = true;
+            end_turn_number = turn;
+            say(-1, MsgKind::Good, "The year " + year_text(now) + " has come. After six thousand years of history the reign of " + ruler +
+                                       " of the " + civs[human].name + " is at an end.");
+        }
+    }
 }
 
 void Game::end_turn()

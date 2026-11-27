@@ -21,6 +21,7 @@ civcore = static_library(
     'src/core/diplomacy.cpp',
     'src/core/earth.cpp',
     'src/core/databank.cpp',
+    'src/core/fame.cpp',
   ),
   include_directories: civcore_inc,
 )
