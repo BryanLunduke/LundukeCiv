@@ -642,7 +642,7 @@ static void test_wonders()
     }
     // Milestone 1 saves (version 1) still load.
     std::string old = save_game(k);
-    old.replace(0, std::strlen("LUNDUKECIV 2"), "LUNDUKECIV 1");
+    old.replace(0, std::strlen("LUNDUKECIV 3"), "LUNDUKECIV 1");
     Game m;
     CHECK(load_game(old, m));
 }
@@ -752,7 +752,7 @@ static void test_envoys()
     CHECK_EQ(h.city(east)->shields, sh + 50);
 }
 
-static void test_rail_pollution()
+static void test_railroads()
 {
     // Railroads: free movement between railroad squares, +50% shields.
     Game g = flat_game();
@@ -776,36 +776,125 @@ static void test_rail_pollution()
     g.learn(0, Advance::Railroad);
     CHECK(g.can_work(*g.unit(s), Order::Railroad));
 
-    // Pollution halves a square's output until settlers clean it up.
-    Game p = flat_game();
-    CHECK_EQ(p.tile_yield(20, 20, 0, false).food, 2);
-    p.map.at(20, 20).pollution = true;
-    CHECK_EQ(p.tile_yield(20, 20, 0, false).food, 1);
-    CHECK_EQ(p.polluted_squares(), 1);
-    const int c = place(p, 0, UnitType::Settlers, 20, 20);
-    CHECK(p.can_work(*p.unit(c), Order::Clean));
-    CHECK(p.start_work(c, Order::Clean));
-    for (int t = 0; t < 6 && p.map.at(20, 20).pollution; ++t) p.end_turn();
-    CHECK(!p.map.at(20, 20).pollution);
-
-    // Global warming once enough pollution has built up.
-    Game w = flat_game();
-    for (int x = 20; x < 30; ++x) w.map.at(x, 20).pollution = true;
-    w.warming = Game::kWarmingThreshold - 1;
-    CHECK(w.warming_risk() >= 99);
-    w.end_turn();
-    CHECK_EQ(w.warming_events, 1);
-    CHECK_EQ(w.warming, 0);
-    bool said = false;
-    for (const Message &msg : w.messages) said |= msg.text.find("Global warming") != std::string::npos;
-    CHECK(said);
     // Saved and loaded.
-    w.map.at(40, 40).railroad = w.map.at(40, 40).road = true;
+    g.map.at(40, 40).railroad = g.map.at(40, 40).road = true;
     Game back;
-    CHECK(load_game(save_game(w), back));
-    CHECK_EQ(back.warming_events, 1);
+    CHECK(load_game(save_game(g), back));
     CHECK(back.map.at(40, 40).railroad);
-    CHECK(back.map.at(20, 20).pollution);
+}
+
+// Pollution and global warming are not in this game: a big industrial city
+// never dirties the land or changes the climate, and saves from before
+// (version 2, with polluted squares, a "climate" line, Mass Transit and
+// Recycling Centers, a clean-up order) load with all of that dropped.
+static void test_no_pollution()
+{
+    Game g = flat_game(Terrain::Hills);
+    const int s = place(g, 0, UnitType::Settlers, 20, 20);
+    CHECK(g.found_city(s, "Smokestack"));
+    City &c = g.cities.back();
+    for (Advance a : {Advance::Industrialization, Advance::Automobile, Advance::MassProduction, Advance::Plastics,
+                      Advance::Refining, Advance::Electricity, Advance::Robotics, Advance::Recycling})
+        g.learn(0, a);
+    c.size = 20;
+    c.add(Building::Aqueduct);
+    c.add(Building::Factory);
+    c.add(Building::PowerPlant);
+    c.add(Building::MfgPlant);
+    for (int dy = -2; dy <= 2; ++dy)
+        for (int dx = -2; dx <= 2; ++dx) g.map.at(20 + dx, 20 + dy).mine = true;
+    g.civs[0].gold = 100000;
+    g.update_city(c);
+    // Factory +50%, Power Plant +50%, Mfg. Plant +100%: 300% of the raw shields.
+    CHECK_EQ(c.stats.shield_surplus + c.stats.shield_upkeep, c.stats.raw.shields * 300 / 100);
+    CHECK(c.stats.raw.shields >= 20);
+    std::vector<Terrain> before;
+    for (const Tile &t : g.map.tiles) before.push_back(t.terrain);
+    for (int t = 0; t < 120; ++t) {
+        g.cities.back().size = 20;
+        g.end_turn();
+    }
+    bool same = true;
+    for (size_t i = 0; i < before.size(); ++i) same &= g.map.tiles[i].terrain == before[i];
+    CHECK(same);
+    for (const Message &m : g.messages) {
+        CHECK(m.text.find("ollution") == std::string::npos);
+        CHECK(m.text.find("warming") == std::string::npos);
+    }
+    // Mass Transit and the Recycling Center are gone; Recycling stays an advance.
+    for (int b = 0; b < kBuildingCount; ++b) {
+        CHECK(std::strcmp(building_info(b).name, "Mass Transit") != 0);
+        CHECK(std::strcmp(building_info(b).name, "Recycling Center") != 0);
+    }
+    CHECK(std::strcmp(advance_info(Advance::Recycling).name, "Recycling") == 0);
+    const std::string text = save_game(g);
+    CHECK(text.rfind("LUNDUKECIV 3\n", 0) == 0);
+    CHECK(text.find("climate|") == std::string::npos);
+
+    // A version 2 save: City Walls, Factory, Mass Transit, Mfg. Plant,
+    // Recycling Center and SDI Defense (old bits 7, 13, 17, 18, 19, 20), a
+    // city building a Recycling Center, polluted squares and a settler on
+    // a clean-up job.
+    Game v = flat_game();
+    const int vs = place(v, 0, UnitType::Settlers, 30, 30);
+    CHECK(v.found_city(vs, "Oldtown"));
+    const int cleaner = place(v, 0, UnitType::Settlers, 31, 31);
+    std::string old = save_game(v);
+    old.replace(0, std::strlen("LUNDUKECIV 3"), "LUNDUKECIV 2");
+    {
+        // City line: field 9 build_unit, 10 build, 11 buildings.
+        const size_t at = old.find("city|");
+        const size_t eol = old.find('\n', at);
+        std::string line = old.substr(at, eol - at);
+        std::vector<std::string> f;
+        size_t p0 = 0;
+        for (size_t p1; (p1 = line.find('|', p0)) != std::string::npos; p0 = p1 + 1) f.push_back(line.substr(p0, p1 - p0));
+        f.push_back(line.substr(p0));
+        f[9] = "0";
+        f[10] = "19";
+        f[11] = std::to_string(1u << 0 | 1u << 7 | 1u << 13 | 1u << 17 | 1u << 18 | 1u << 19 | 1u << 20);
+        std::string nl;
+        for (size_t i = 0; i < f.size(); ++i) nl += (i ? "|" : "") + f[i];
+        old.replace(at, eol - at, nl);
+        // The settler's order: 10 was "clean up pollution".
+        const std::string key = "unit|" + std::to_string(cleaner) + "|";
+        const size_t ua = old.find(key);
+        size_t q = ua;
+        for (int k = 0; k < 8; ++k) q = old.find('|', q) + 1;
+        old.replace(q, old.find('|', q) - q, "10");
+        // Map row 31: square 31 gets the old pollution bit (19).
+        size_t row = old.find("map|");
+        row = old.find('\n', row) + 1;
+        for (int y = 0; y < 31; ++y) row = old.find('\n', row) + 1;
+        const unsigned word = static_cast<unsigned>(std::strtoul(old.substr(row + 31 * 5, 5).c_str(), nullptr, 16)) | (1u << 19);
+        char buf[16];
+        std::snprintf(buf, sizeof buf, "%05x", word & 0xFFFFFu);
+        old.replace(row + 31 * 5, 5, buf);
+        old.replace(old.find("space|"), 0, "climate|599|3\n");
+    }
+    Game w;
+    std::string err;
+    CHECK(load_game(old, w, &err));
+    CHECK(err.empty());
+    if (!w.cities.empty()) {
+        const City &oc = w.cities.back();
+        CHECK(oc.has(Building::Palace));
+        CHECK(oc.has(Building::CityWalls));
+        CHECK(oc.has(Building::Factory));
+        CHECK(oc.has(Building::MfgPlant));
+        CHECK(oc.has(Building::SdiDefense));
+        CHECK(!oc.has(Building::Aqueduct));
+        CHECK_EQ(static_cast<long long>(oc.buildings), static_cast<long long>(1u << 0 | 1u << 7 | 1u << 13 | 1u << 17 | 1u << 18));
+        CHECK(oc.build_unit);   // the Recycling Center's shields go to a defender
+    }
+    if (const Unit *u = w.unit(cleaner)) CHECK(u->order == Order::None);
+    // Saved again, the old pollution bit is gone from the map.
+    const std::string again = save_game(w);
+    CHECK(again.find("climate|") == std::string::npos);
+    CHECK(save_game(w) == again);
+    Game x;
+    CHECK(load_game(again, x));
+    CHECK(save_game(x) == again);
 }
 
 static void test_barbarians()
@@ -990,7 +1079,7 @@ int main(int argc, char **argv)
         {"units_table", test_units_table}, {"combat_odds", test_combat_odds},       {"city_growth", test_city_growth},
         {"settlers_work", test_settlers_work}, {"movement", test_movement},          {"save_roundtrip", test_save_roundtrip},
         {"ai_smoke", test_ai_smoke},           {"wonders", test_wonders}, {"envoys", test_envoys},
-        {"rail_pollution", test_rail_pollution}, {"barbarians", test_barbarians}, {"space_race", test_space_race}, {"pad_nav", test_pad_nav},
+        {"railroads", test_railroads}, {"no_pollution", test_no_pollution}, {"barbarians", test_barbarians}, {"space_race", test_space_race}, {"pad_nav", test_pad_nav},
     };
     if (argc < 2) {
         for (const auto &t : tests) t.second();

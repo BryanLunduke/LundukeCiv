@@ -109,8 +109,7 @@ inline const UnitInfo &unit_info(int u) { return unit_info(static_cast<UnitType>
 
 enum class Building : std::uint8_t {
     Palace, Barracks, Granary, Temple, Marketplace, Library, Courthouse, CityWalls, Aqueduct, Colosseum,
-    Cathedral, University, Bank, Factory, PowerPlant, HydroPlant, NuclearPlant, MassTransit, MfgPlant,
-    RecyclingCenter, SdiDefense,
+    Cathedral, University, Bank, Factory, PowerPlant, HydroPlant, NuclearPlant, MfgPlant, SdiDefense,
     Count,
 };
 constexpr int kBuildingCount = static_cast<int>(Building::Count);

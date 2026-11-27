@@ -1120,7 +1120,7 @@ void App::draw_help(cairo_t *cr, Dialog &d)
     const std::pair<const char *, const char *> rows[] = {
         {"Arrows, keypad", "Move the active unit (7 9 1 3 diagonals)"},
         {"B", "Found a city (or join one)"},
-        {"R  I  M  P", "Road/railroad, irrigate, mine, fortress/clean"},
+        {"R  I  M  P", "Road/railroad, irrigate, mine, fortress"},
         {"F  S", "Fortify, sentry"},
         {"G", "Go to a square (then click it)"},
         {"W  Space  N", "Wait, skip this turn, next unit"},

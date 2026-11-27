@@ -520,11 +520,6 @@ Yield Game::tile_yield(int x, int y, int civ, bool centre) const
     }
     if (centre) v.shields = std::max(1, v.shields);
     if (t.railroad) v.shields += v.shields / 2;
-    if (t.pollution) {
-        v.food /= 2;
-        v.shields /= 2;
-        v.trade /= 2;
-    }
     return v;
 }
 
@@ -637,18 +632,6 @@ void Game::update_city(City &c)
             shields = shields * pct / 100;
         }
         s.shield_surplus = shields - s.shield_upkeep;
-        {
-            // Pollution: industry over 20 shields, and from Industrialization
-            // on, a crowd of citizens (unless Mass Transit carries them).
-            int industry = shields;
-            if (c.has(Building::RecyclingCenter)) industry /= 3;
-            if (c.has(Building::HydroPlant) || c.has(Building::NuclearPlant) || hoover_here(c)) industry = industry * 3 / 4;
-            int tech = 0;
-            for (Advance a : {Advance::Industrialization, Advance::Automobile, Advance::MassProduction, Advance::Plastics})
-                tech += has(c.owner, a) ? 1 : 0;
-            const int people = c.has(Building::MassTransit) ? 0 : c.size * tech / 4;
-            s.pollution = std::clamp(industry + people - 20, 0, 100);
-        }
         // Corruption grows with distance from the Palace.
         int dist = 20;
         for (const City &o : cities) {
@@ -804,17 +787,6 @@ int Game::buy_cost(const City &c) const
     return cost;
 }
 
-// ---------------------------------------------------------------- pollution
-
-int Game::polluted_squares() const
-{
-    int n = 0;
-    for (const Tile &t : map.tiles) n += t.pollution;
-    return n;
-}
-
-int Game::pollution_chance(const City &c) const { return c.stats.pollution; }
-
 // ---------------------------------------------------------------- space race
 
 bool Game::space_open() const { return wonder_built(Wonder::Apollo); }
@@ -900,54 +872,6 @@ void Game::space_arrivals()
         c.structurals = c.components = c.modules = 0;
         c.launch_turn = c.arrival_turn = -1;
     }
-}
-
-int Game::warming_risk() const { return std::min(100, warming * 100 / kWarmingThreshold); }
-
-void Game::pollute(City &c)
-{
-    std::vector<std::pair<int, int>> spots;
-    for (const auto &o : kCross) {
-        const int x = map.wrap_x(c.x + o[0]), y = c.y + o[1];
-        if (!map.land(x, y) || map.at(x, y).pollution) continue;
-        spots.push_back({x, y});
-    }
-    if (map.land(c.x, c.y) && !map.at(c.x, c.y).pollution) spots.push_back({c.x, c.y});
-    if (spots.empty()) return;
-    const auto p = spots[rng.below(static_cast<int>(spots.size()))];
-    map.at(p.first, p.second).pollution = true;
-    say(c.owner, MsgKind::Bad, "Pollution near " + c.name + ". Settlers can clean it up (P).", p.first, p.second);
-}
-
-void Game::global_warming()
-{
-    warming = 0;
-    ++warming_events;
-    // Coasts flood into swamp, fields dry to desert, forests turn to jungle.
-    int changed = 0;
-    for (int tries = 0; tries < 4000 && changed < 40; ++tries) {
-        const int x = rng.below(map.w), y = 2 + rng.below(map.h - 4);
-        Tile &t = map.at(x, y);
-        if (t.terrain == Terrain::Ocean || city_at(x, y)) continue;
-        Terrain to = t.terrain;
-        const bool coast = map.coastal(x, y);
-        switch (t.terrain) {
-        case Terrain::Grassland:
-        case Terrain::Plains: to = coast ? Terrain::Swamp : Terrain::Desert; break;
-        case Terrain::Desert: if (coast) to = Terrain::Swamp; break;
-        case Terrain::Forest: to = Terrain::Jungle; break;
-        case Terrain::Arctic: to = Terrain::Tundra; break;
-        case Terrain::Tundra: to = Terrain::Desert; break;
-        default: break;
-        }
-        if (to == t.terrain) continue;
-        t.terrain = to;
-        t.irrigation = false;
-        t.mine = false;
-        ++changed;
-    }
-    say(-1, MsgKind::Bad, "Global warming! Pollution has changed the climate: coasts turn to swamp and fields to desert.");
-    for (City &c : cities) update_city(c);
 }
 
 // ---------------------------------------------------------------- barbarians
@@ -1979,7 +1903,6 @@ bool Game::can_work(const Unit &u, Order job) const
         return true;
     case Order::Fortress: return has(u.owner, Advance::Construction) && !t.fortress && !city_at(u.x, u.y);
     case Order::Railroad: return has(u.owner, Advance::Railroad) && t.road && !t.railroad && !city_at(u.x, u.y);
-    case Order::Clean: return t.pollution;
     default: return false;
     }
 }
@@ -2367,7 +2290,6 @@ void Game::process_city(City &c, bool &learned_any)
         ct.road = true;
         ct.railroad = true;
     }
-    if (s.pollution > 0 && rng.below(100) < s.pollution) pollute(c);
     if (!can_build(c, c.build_unit, c.build)) {
         c.build_unit = true;
         c.build = static_cast<int>(unit_available(c.owner, UnitType::Phalanx) ? UnitType::Phalanx : UnitType::Militia);
@@ -2576,7 +2498,7 @@ void Game::start_turn_for(int ci)
         }
         if (u->order == Order::Fortifying) u->order = Order::Fortified;
         if (u->order == Order::Road || u->order == Order::Irrigate || u->order == Order::Mine || u->order == Order::Fortress ||
-            u->order == Order::Railroad || u->order == Order::Clean) {
+            u->order == Order::Railroad) {
             u->moves = 0;
             Tile &t = map.at(u->x, u->y);
             const TerrainInfo &ti = terrain_info(t.terrain);
@@ -2587,7 +2509,6 @@ void Game::start_turn_for(int ci)
             case Order::Irrigate: need = ti.irrigate_turns; break;
             case Order::Mine: need = ti.mine_turns; break;
             case Order::Railroad: need = ti.road_turns * 2; break;
-            case Order::Clean: need = 3; break;
             default: need = ti.fortress_turns; break;
             }
             // Settlers working the same job on the square help each other.
@@ -2617,7 +2538,6 @@ void Game::start_turn_for(int ci)
                     }
                     break;
                 case Order::Railroad: t.railroad = true; break;
-                case Order::Clean: t.pollution = false; break;
                 default: t.fortress = true; break;
                 }
                 for (Unit &o : units) {
@@ -2649,14 +2569,6 @@ void Game::new_turn()
     ++turn;
     for (int c = 0; c < static_cast<int>(civs.size()); ++c) start_turn_for(c);
     spawn_barbarians();
-    // Global warming builds up while squares stay polluted.
-    const int polluted = polluted_squares();
-    if (polluted > 0) {
-        warming += polluted;
-    } else {
-        warming = std::max(0, warming - 10);
-    }
-    if (warming >= kWarmingThreshold) global_warming();
     space_arrivals();
     check_elimination();
     refresh_visibility();

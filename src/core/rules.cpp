@@ -149,9 +149,7 @@ const BuildingInfo kBuildings[kBuildingCount] = {
     {"Power Plant", 160, 4, A::Refining, "Shields +50% (needs a Factory)."},
     {"Hydro Plant", 240, 4, A::Electronics, "Shields +50% (needs a Factory)."},
     {"Nuclear Plant", 160, 2, A::NuclearPower, "Shields +50% (needs a Factory)."},
-    {"Mass Transit", 160, 4, A::MassProduction, "No pollution from population."},
     {"Mfg. Plant", 320, 6, A::Robotics, "Shields +100% (needs a Factory)."},
-    {"Recycling Center", 200, 2, A::Recycling, "Industrial pollution -66%."},
     {"SDI Defense", 200, 4, A::Superconductor, "Protects the city from nuclear attack."},
 };
 

@@ -23,7 +23,7 @@ namespace civ {
 constexpr int kMaxCivs = 8;
 constexpr int kUnitHp = 10;   // hit points of a healthy unit; each lost combat round costs one
 
-enum class Order : std::uint8_t { None, Fortifying, Fortified, Sentry, Goto, Road, Irrigate, Mine, Fortress, Railroad, Clean };
+enum class Order : std::uint8_t { None, Fortifying, Fortified, Sentry, Goto, Road, Irrigate, Mine, Fortress, Railroad };
 
 struct Unit {
     int id = 0;
@@ -59,7 +59,6 @@ struct CityStats {
     int unhappy = 0;
     int food_box = 0;
     bool disorder = false;
-    int pollution = 0;      // percent chance a turn of polluting a square
     int base_trade = 0;     // trade from the land, before trade routes
     int route_trade = 0;    // added by trade routes
 };
@@ -229,8 +228,6 @@ public:
     // -2 lost with its city.
     std::array<int, kWonderCount> wonder_city{};
     std::array<std::uint32_t, kMaxCivs> wonder_started{};  // announced "is building" bits
-    int warming = 0;           // global warming builds up while squares are polluted
-    int warming_events = 0;
 
     Game() { wonder_city.fill(-1); }
 
@@ -340,12 +337,6 @@ public:
     bool launch(int civ);
     int arrival_year(int civ) const;                // -1 if not in flight
 
-    // --- pollution
-    int polluted_squares() const;
-    int pollution_chance(const City &c) const;     // percent per turn
-    int warming_risk() const;                       // percent: how close the next warming is
-    static constexpr int kWarmingThreshold = 600;
-
     // --- turn
     void begin_human_phase();             // goto orders, sentries waking
     void end_turn();                      // computer players, then a new turn
@@ -383,11 +374,9 @@ private:
     void ai_diplomacy(int civ);
     bool ai_settler(Unit &u);
     void ai_envoy(Unit &u);    // Diplomats and Caravans
-    void pollute(City &c);
     void ai_barbarians(int civ);
     bool barbarian_landing(int bc, UnitType ship, const std::vector<UnitType> &army);
     bool barbarian_uprising(int bc, const std::vector<UnitType> &army);
-    void global_warming();
     void space_arrivals();
     void lose_spaceship(int civ, bool in_flight);
 };

@@ -23,7 +23,6 @@ struct PaintTile {
     bool river = false;
     bool road = false;
     bool rail = false;
-    bool pollution = false;
     bool irrigated = false;
     bool mine = false;
     bool hut = false;
