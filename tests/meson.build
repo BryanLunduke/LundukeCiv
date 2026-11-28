@@ -19,6 +19,6 @@ foreach t : ['score', 'end_2100', 'hall_of_fame', 'save_v6', 'huts', 'diplomats'
   test(t, m5_tests, args: [t], timeout: 120, suite: 'm5')
 endforeach
 qa_tests = executable('qa_tests', files('qa_tests.cpp'), dependencies: civcore_dep)
-foreach t : ['ship_capture', 'barbarian_restraint', 'hut_barbarians_gentle']
+foreach t : ['ship_capture', 'barbarian_restraint', 'hut_barbarians_gentle', 'civil_war_stacks']
   test(t, qa_tests, args: [t], timeout: 120, suite: 'qa')
 endforeach

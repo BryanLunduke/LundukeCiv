@@ -605,22 +605,36 @@ int Game::civil_war(int ci, int cap_x, int cap_y)
             far_id = id;
         }
     }
-    for (Unit &u : units) {
-        if (u.owner != ci) continue;
-        const City *here = city_at(u.x, u.y);
+    // Units in a city side with it; in the field, a unit sides with its
+    // home city -- but a square keeps to one side (the one most of its
+    // units are for, the old ruler on a tie), and cargo stays with its ship.
+    std::map<std::pair<int, int>, std::pair<int, int>> votes;   // square: (old, rebels)
+    for (const Unit &u : units) {
+        if (u.owner != ci || city_at(u.x, u.y) || u.carried_by >= 0) continue;
         const City *home_city = city(u.home);
-        if (here) {
+        auto &v = votes[{u.x, u.y}];
+        if (home_city && home_city->owner == slot) ++v.second;
+        else ++v.first;
+    }
+    for (Unit &u : units) {
+        if (u.owner != ci || u.carried_by >= 0) continue;
+        if (const City *here = city_at(u.x, u.y)) {
             if (here->owner == slot) u.owner = slot;
-        } else if (home_city && home_city->owner == slot) {
-            u.owner = slot;
+        } else {
+            const auto &v = votes[{u.x, u.y}];
+            if (v.second > v.first) u.owner = slot;
         }
+    }
+    for (Unit &u : units) {
+        if (u.owner != ci || u.carried_by < 0) continue;
+        if (const Unit *ship = unit(u.carried_by)) u.owner = ship->owner;
+    }
+    for (Unit &u : units) {
+        if (u.owner != ci && u.owner != slot) continue;
         // Support stays with one's own side.
         const City *h = city(u.home);
+        const City *here = city_at(u.x, u.y);
         if (h && h->owner != u.owner) u.home = here && here->owner == u.owner ? here->id : -1;
-        if (u.carried_by >= 0) {
-            const Unit *ship = unit(u.carried_by);
-            if (ship && ship->owner != u.owner) u.carried_by = -1;
-        }
     }
     if (City *p = city(far_id)) p->add(Building::Palace);
     for (City &c : cities) {

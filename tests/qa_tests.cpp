@@ -236,3 +236,52 @@ TEST(hut_barbarians_gentle)
     g.turn = Game::kBarbarianStartTurn - 1;
     CHECK(g.hut_outcome(0, 30, 30, 3) == HutOutcome::Mercenaries);
 }
+
+// ---------------------------------------------------------------- civil war
+
+TEST(civil_war_stacks)
+{
+    // When a people splits, a square in the field keeps to one side and
+    // cargo stays with its ship: no square holds two peoples' units.
+    Game g = flat_game(Terrain::Grassland, 3);
+    g.civs[1].ai = true;
+    g.civs[1].tribe = 0;
+    g.civs[1].gold = 400;
+    const int xs[] = {10, 16, 22, 28, 34, 40};
+    for (int i = 0; i < 6; ++i) town(g, 1, xs[i], 20, 6, "Roma");
+    g.civs[2].alive = false;
+    for (Unit &u : g.units) u.owner = 1;
+    const int rebel_home = g.city_at(40, 20)->id, loyal_home = g.city_at(16, 20)->id;
+    int stack[3];
+    for (int k = 0; k < 3; ++k) {
+        stack[k] = place(g, 1, UnitType::Phalanx, 30, 24);
+        g.unit(stack[k])->home = k < 2 ? rebel_home : loyal_home;
+    }
+    // A ship of the old people's at sea with a rebel-homed passenger.
+    for (int y = 0; y < g.map.h; ++y) g.map.at(50, y).terrain = Terrain::Ocean;
+    g.map.label_continents();
+    const int ship = place(g, 1, UnitType::Trireme, 50, 22);
+    g.unit(ship)->home = loyal_home;
+    const int rider = place(g, 1, UnitType::Legion, 50, 22);
+    g.unit(rider)->home = rebel_home;
+    g.unit(rider)->carried_by = ship;
+    g.declare_war(0, 1);
+    const int a = place(g, 0, UnitType::Armor, 9, 20);
+    g.move(a, 1, 0);
+    CHECK_EQ(g.civil_wars, 1);
+    const int r = g.city_at(40, 20)->owner;
+    CHECK(r != 1);
+    CHECK_EQ(g.unit(stack[0])->owner, r);
+    CHECK_EQ(g.unit(stack[1])->owner, r);
+    CHECK_EQ(g.unit(stack[2])->owner, r);   // outvoted: goes with the square
+    CHECK_EQ(g.unit(rider)->owner, g.unit(ship)->owner);
+    CHECK_EQ(g.unit(rider)->carried_by, ship);
+    std::map<std::pair<int, int>, int> owner_of;
+    for (const Unit &u : g.units) {
+        auto it = owner_of.find({u.x, u.y});
+        if (it == owner_of.end()) owner_of[{u.x, u.y}] = u.owner;
+        else CHECK_EQ(it->second, u.owner);
+        // Support is with one's own side.
+        if (const City *h = g.city(u.home)) CHECK_EQ(h->owner, u.owner);
+    }
+}
