@@ -5,6 +5,7 @@
 #include "tree_layout.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <functional>
 #include <utility>
@@ -181,13 +182,16 @@ TreeLayout layout_dependency_tree(const std::vector<TreeNode> &nodes, const Tree
         }
     }
 
-    // Vertical packing: barycenter, then a two-pass overlap resolve.
+    // Vertical packing: use the canvas, barycenter, resolve overlaps, then
+    // center the used block so a short layer does not sit on the floor.
     const double min_gap = p.gap;
     const double row_h = p.row_h;
     int tallest = 1;
     for (const auto &l : layers) tallest = std::max(tallest, static_cast<int>(l.size()));
     const double need = tallest * row_h + (tallest - 1) * min_gap;
-    const double pack_h = std::min(p.canvas_h, std::max(need + 16.0, std::min(p.canvas_h * 0.72, need + 80.0)));
+    const double pad = 4.0;
+    const double avail = std::max(row_h, p.canvas_h - 2.0 * pad);
+    const double pack_h = std::min(avail, std::max(need, avail));
     const double top0 = std::max(0.0, (p.canvas_h - pack_h) / 2.0);
     const double lo = top0, hi = top0 + pack_h - row_h;
 
@@ -239,6 +243,22 @@ TreeLayout layout_dependency_tree(const std::vector<TreeNode> &nodes, const Tree
             }
         }
         for (const auto &layer : layers) resolve(layer);
+    }
+
+    if (!ys.empty()) {
+        double min_y = ys.begin()->second, max_y = min_y;
+        for (const auto &kv : ys) {
+            min_y = std::min(min_y, kv.second);
+            max_y = std::max(max_y, kv.second);
+        }
+        const double used = (max_y + row_h) - min_y;
+        const double target = (p.canvas_h - used) / 2.0;
+        double shift = target - min_y;
+        if (min_y + shift < pad) shift = pad - min_y;
+        if (max_y + row_h + shift > p.canvas_h - pad) shift = p.canvas_h - pad - (max_y + row_h);
+        if (std::fabs(shift) > 0.5) {
+            for (auto &kv : ys) kv.second += shift;
+        }
     }
 
     const double nw = p.col_w - 8;

@@ -37,60 +37,29 @@ void hscrollbar(cairo_t *cr, double x, double y, double w, double h, double thum
 // Wrap on spaces, or shrink a long single word, rather than hyphenating.
 void node_label(cairo_t *cr, const std::string &name, double x, double y, double max_w, double max_h, const Ink &ink)
 {
-    const char *fonts[] = {kSmallBold, kTagFont, "Sans Bold 8", "Sans Bold 7"};
-    auto measure_plain = [&](const char *font, const std::string &text) {
-        return measure(cr, font, text);
-    };
-    std::string chosen_text = name;
-    const char *chosen_font = fonts[3];
-    bool ok = false;
-    for (const char *font : fonts) {
-        if (name.find(' ') != std::string::npos) {
-            // Try one line, then a split after each word.
-            const Metrics one = measure_plain(font, name);
-            if (one.w <= max_w + 1 && one.h <= max_h + 1) {
-                chosen_text = name;
-                chosen_font = font;
-                ok = true;
-                break;
+    // One consistent size (Sans Bold 10). Long names wrap to two lines;
+    // columns are wide enough that we never shrink the type.
+    const char *font = kSmallBold;
+    std::string chosen = name;
+    const Metrics one = measure(cr, font, name);
+    if (one.w > max_w + 1 && name.find(' ') != std::string::npos) {
+        double best = 1e9;
+        size_t pos = 0;
+        while ((pos = name.find(' ', pos)) != std::string::npos) {
+            const std::string s = name.substr(0, pos) + "\n" + name.substr(pos + 1);
+            const Metrics m = measure(cr, font, s);
+            const double overflow = std::max(0.0, m.w - max_w) + std::max(0.0, m.h - max_h);
+            const double score = overflow * 1000.0 + m.w;
+            if (score < best) {
+                best = score;
+                chosen = s;
             }
-            // Prefer a split on spaces (e.g. Ceremonial / Burial).
-            std::vector<std::string> splits;
-            size_t pos = 0;
-            while ((pos = name.find(' ', pos)) != std::string::npos) {
-                splits.push_back(name.substr(0, pos) + "\n" + name.substr(pos + 1));
-                ++pos;
-            }
-            bool found = false;
-            for (const std::string &s : splits) {
-                const Metrics m = measure_plain(font, s);
-                if (m.w <= max_w + 1 && m.h <= max_h + 1) {
-                    chosen_text = s;
-                    chosen_font = font;
-                    found = true;
-                    // keep looking for a later/better fit only if this one
-                    // already works; first fit at this size is enough.
-                    break;
-                }
-            }
-            if (found) {
-                ok = true;
-                break;
-            }
-        } else {
-            const Metrics m = measure_plain(font, name);
-            if (m.w <= max_w + 1 && m.h <= max_h + 1) {
-                chosen_text = name;
-                chosen_font = font;
-                ok = true;
-                break;
-            }
+            ++pos;
         }
     }
-    (void)ok;
-    const Metrics m = measure(cr, chosen_font, chosen_text);
+    const Metrics m = measure(cr, font, chosen);
     const double ty = y + std::max(0.0, (max_h - m.h) / 2.0);
-    text(cr, chosen_font, chosen_text, x, ty, ink);
+    text(cr, font, chosen, x, ty, ink);
 }
 
 void checkmark(cairo_t *cr, double x, double y, double s, const Ink &ink)
@@ -126,11 +95,29 @@ void DependencyTreeView::refresh_path()
 TreeLayoutParams DependencyTreeView::params_for(double canvas_w, double canvas_h) const
 {
     TreeLayoutParams p;
-    // Comfortable columns that still leave room to pan on a 1024-wide window.
-    p.col_w = canvas_w >= 1400 ? 112 : (canvas_w >= 1000 ? 118 : 108);
-    p.row_h = canvas_h >= 500 ? 38 : 32;
+    // Wide enough for "Industrialization" at Sans Bold 10, plus a checkmark.
+    // Two-line labels are 38 px tall; use a 42 px row when the tallest
+    // layer (8 advances) still fits, and tighten only on a short window.
+    p.col_w = canvas_w >= 1400 ? 148 : (canvas_w >= 1000 ? 150 : 146);
     p.canvas_h = std::max(80.0, canvas_h - inner_top_ - inner_bot_);
-    p.gap = 8;
+    const double avail = p.canvas_h;
+    constexpr int kTallest = 8;
+    auto fits = [&](double row, double gap) {
+        return kTallest * row + (kTallest - 1) * gap <= avail + 0.5;
+    };
+    if (fits(42, 8)) {
+        p.row_h = 42;
+        p.gap = 8;
+    } else if (fits(40, 6)) {
+        p.row_h = 40;
+        p.gap = 6;
+    } else if (fits(38, 4)) {
+        p.row_h = 38;
+        p.gap = 4;
+    } else {
+        p.row_h = 38;
+        p.gap = std::max(2.0, std::floor((avail - kTallest * 38) / (kTallest - 1)));
+    }
     return p;
 }
 
@@ -140,6 +127,7 @@ void DependencyTreeView::relayout(double canvas_w, double canvas_h)
     ch_ = canvas_h;
     layout_ = layout_dependency_tree(model_.nodes, params_for(canvas_w, canvas_h));
     clamp_pan();
+    center_visible_y();
 }
 
 void DependencyTreeView::set_canvas(double x, double y, double w, double h)
@@ -152,6 +140,7 @@ void DependencyTreeView::set_canvas(double x, double y, double w, double h)
         cw_ = w;
         ch_ = h;
         clamp_pan();
+        center_visible_y();
     }
 }
 
@@ -165,11 +154,49 @@ void DependencyTreeView::clamp_pan()
     pan_y_ = std::clamp(pan_y_, 0.0, max_y);
 }
 
+void DependencyTreeView::center_visible_y()
+{
+    // When a horizontal pan leaves only a short band of nodes in view
+    // (the Modern tail, for example), lift that band into the middle of
+    // the viewport. A column that already fills the height is left alone.
+    if (layout_.boxes.empty() || ch_ <= 0) return;
+    const double view_w = std::max(1.0, cw_ - inner_x_ * 2);
+    const double view_h = std::max(1.0, ch_ - inner_top_ - inner_bot_);
+    const double left = pan_x_, right = pan_x_ + view_w;
+    double min_y = 0, max_y = 0;
+    bool any = false;
+    for (const TreeNodeBox &b : layout_.boxes) {
+        const double vis = std::min(b.x + b.w, right) - std::max(b.x, left);
+        if (vis < std::min(24.0, b.w * 0.4)) continue;
+        if (!any) {
+            min_y = b.y;
+            max_y = b.y + b.h;
+            any = true;
+        } else {
+            min_y = std::min(min_y, b.y);
+            max_y = std::max(max_y, b.y + b.h);
+        }
+    }
+    if (!any) return;
+    const double used = max_y - min_y;
+    if (used >= view_h - 8) {
+        // Visible nodes already fill the viewport; keep pan_y in range.
+        const double lo = 0.0;
+        const double hi = std::max(0.0, layout_.content_h - view_h);
+        pan_y_ = std::clamp(pan_y_, lo, hi);
+        return;
+    }
+    pan_y_ = (min_y + max_y) / 2.0 - view_h / 2.0;
+}
+
 void DependencyTreeView::pan_by(double dx, double dy)
 {
     pan_x_ += dx;
     pan_y_ += dy;
     clamp_pan();
+    // Recentering is for a horizontal move that changes which columns
+    // are in view. A vertical nudge from the arrows is left alone.
+    if (std::fabs(dx) >= std::fabs(dy)) center_visible_y();
 }
 
 void DependencyTreeView::center_on(int id)
@@ -181,18 +208,21 @@ void DependencyTreeView::center_on(int id)
     pan_x_ = b.x + b.w / 2.0 - view_w / 2.0;
     pan_y_ = b.y + b.h / 2.0 - view_h / 2.0;
     clamp_pan();
+    center_visible_y();
 }
 
 void DependencyTreeView::jump_home()
 {
     pan_x_ = 0;
     clamp_pan();
+    center_visible_y();
 }
 
 void DependencyTreeView::jump_end()
 {
     pan_x_ = 1e9;
     clamp_pan();
+    center_visible_y();
 }
 
 bool DependencyTreeView::in_canvas(double x, double y) const
@@ -262,7 +292,7 @@ void DependencyTreeView::draw_node(cairo_t *cr, const TreeNodeBox &b, bool hover
     const bool mark = st == TreeNodeState::Known || st == TreeNodeState::Researching;
     const double tx = x + 5;
     const double max_w = std::max(16.0, b.w - 10 - (mark ? 12 : 0));
-    node_label(cr, name, tx, y + 2, max_w, b.h - 4, ink);
+    node_label(cr, name, tx, y, max_w, b.h, ink);
     if (st == TreeNodeState::Known) {
         checkmark(cr, x + b.w - 15, y + (b.h - 11) / 2, 11, kSlateGood);
     } else if (st == TreeNodeState::Researching) {
@@ -414,26 +444,63 @@ void DependencyTreeView::draw_tooltip(cairo_t *cr, double mouse_x, double mouse_
     tw = std::min(max_w, tw + 2 * pad);
     th -= gap;
 
-    auto overlaps_node = [&](double x, double y) {
-        return x < nx + b.w && x + tw > nx && y < ny + b.h && y + th > ny;
+    auto overlap_area = [](double ax, double ay, double aw, double ah, double bx, double by, double bw, double bh) {
+        const double ix = std::max(0.0, std::min(ax + aw, bx + bw) - std::max(ax, bx));
+        const double iy = std::max(0.0, std::min(ay + ah, by + bh) - std::max(ay, by));
+        return ix * iy;
     };
-    auto fits = [&](double x, double y) {
-        return x >= cx_ + 6 && x + tw <= cx_ + cw_ - 6 && y >= cy_ + 6 && y + th <= cy_ + ch_ - 6 &&
-               !overlaps_node(x, y);
+    auto path_hit = [&](double x, double y) {
+        double a = 0;
+        for (const TreeNodeBox &ob : layout_.boxes) {
+            if (ob.id == id || !path_.count(ob.id)) continue;
+            const double ox = cx_ + inner_x_ - pan_x_ + ob.x;
+            const double oy = cy_ + inner_top_ - pan_y_ + ob.y;
+            a += overlap_area(x, y, tw, th, ox, oy, ob.w, ob.h);
+        }
+        return a;
     };
-    // Prefer the right of the node, then the left, then above, then clamp.
-    double x = nx + b.w + 8, y = ny - 8;
-    if (!fits(x, y)) {
-        x = nx - tw - 8;
-        y = ny - 8;
+    auto hovered_hit = [&](double x, double y) {
+        return overlap_area(x, y, tw, th, nx, ny, b.w, b.h);
+    };
+    auto in_canvas = [&](double x, double y) {
+        return x >= cx_ + 6 - 0.5 && y >= cy_ + 6 - 0.5 && x + tw <= cx_ + cw_ - 6 + 0.5 &&
+               y + th <= cy_ + ch_ - 6 + 0.5;
+    };
+
+    struct Cand {
+        double x, y;
+        int pref;   // lower is better: above, below, then sides
+    };
+    std::vector<Cand> cands;
+    auto add = [&](double x, double y, int pref) {
+        cands.push_back({x, y, pref});
+        const double cx = std::clamp(x, cx_ + 6, cx_ + cw_ - 6 - tw);
+        const double cy = std::clamp(y, cy_ + 6, cy_ + ch_ - 6 - th);
+        if (std::fabs(cx - x) > 0.5 || std::fabs(cy - y) > 0.5) cands.push_back({cx, cy, pref + 2});
+    };
+    // Prefer above or below the node so left/right path neighbours stay visible.
+    const double xs[] = {nx + b.w / 2.0 - tw / 2.0, nx, nx + b.w - tw, nx - 8, nx + b.w + 8 - tw};
+    for (double xs_ : xs) {
+        add(xs_, ny - th - 8, 0);
+        add(xs_, ny + b.h + 8, 1);
     }
-    if (!fits(x, y)) {
-        x = nx + b.w / 2.0 - tw / 2.0;
-        y = ny - th - 8;
-    }
-    if (!fits(x, y)) {
-        x = nx + b.w / 2.0 - tw / 2.0;
-        y = ny + b.h + 8;
+    add(nx + b.w + 8, ny + b.h / 2.0 - th / 2.0, 4);
+    add(nx + b.w + 8, ny - 8, 4);
+    add(nx - tw - 8, ny + b.h / 2.0 - th / 2.0, 5);
+    add(nx - tw - 8, ny - 8, 5);
+
+    double x = nx + b.w / 2.0 - tw / 2.0, y = ny - th - 8;
+    double best = 1e99;
+    for (const Cand &c : cands) {
+        double score = c.pref * 50.0;
+        score += path_hit(c.x, c.y) * 8.0;
+        score += hovered_hit(c.x, c.y) * 20.0;
+        if (!in_canvas(c.x, c.y)) score += 20000.0;
+        if (score < best) {
+            best = score;
+            x = c.x;
+            y = c.y;
+        }
     }
     x = std::clamp(x, cx_ + 6, cx_ + cw_ - 6 - tw);
     y = std::clamp(y, cy_ + 6, cy_ + ch_ - 6 - th);

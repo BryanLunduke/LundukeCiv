@@ -2602,36 +2602,53 @@ void App::draw_tech_tree(cairo_t *cr, Dialog &d)
     const double by = dy + dh - 48;
     const bool can_research = tree_selected_ >= 0 && g().can_change_research(me) &&
                               g().can_research(me, static_cast<Advance>(tree_selected_));
+    auto btn_w = [&](const std::string &label, const std::string &key) {
+        const Metrics lm = measure(cr, kBoldFont, label);
+        double w = lm.w + 24;
+        if (!key.empty()) {
+            const Metrics km = measure(cr, kTagFont, key);
+            w = 12 + lm.w + 10 + km.w + 12;
+        }
+        return std::max(100.0, std::ceil(w + 2));
+    };
+    const double w_center = btn_w("Center on Research", "C");
+    const double w_goal = btn_w("Set as Goal", "G");
+    const double w_clear = btn_w("Clear Goal", "");
+    const double w_research = btn_w("Research", "");
+    const double w_close = btn_w("Close", "Esc");
+    const double gap = 8;
     double bx = L;
-    wide_button(cr, bx, by, 168, 38, "Center on Research", "C", false, hover(bx, by, 168, 38));
-    hot(bx, by, 168, 38, [this] {
+    wide_button(cr, bx, by, w_center, 38, "Center on Research", "C", false, hover(bx, by, w_center, 38));
+    hot(bx, by, w_center, 38, [this] {
         if (!game_) return;
         if (g().civs[human()].research != Advance::None) tree_view_.center_on(static_cast<int>(g().civs[human()].research));
         else if (tree_goal_ >= 0) tree_view_.center_on(tree_goal_);
     });
-    bx += 176;
-    wide_button(cr, bx, by, 140, 38, "Set as Goal", "G", tree_selected_ >= 0, hover(bx, by, 140, 38), tree_selected_ >= 0);
-    hot(bx, by, 140, 38, [this] {
+    bx += w_center + gap;
+    wide_button(cr, bx, by, w_goal, 38, "Set as Goal", "G", tree_selected_ >= 0, hover(bx, by, w_goal, 38), tree_selected_ >= 0);
+    hot(bx, by, w_goal, 38, [this] {
         if (tree_selected_ >= 0) tree_goal_ = tree_selected_;
     });
-    bx += 148;
-    wide_button(cr, bx, by, 156, 38, "Clear Goal", "", false, hover(bx, by, 156, 38), tree_goal_ >= 0);
-    hot(bx, by, 156, 38, [this] { tree_goal_ = -1; });
+    bx += w_goal + gap;
+    wide_button(cr, bx, by, w_clear, 38, "Clear Goal", "", false, hover(bx, by, w_clear, 38), tree_goal_ >= 0);
+    hot(bx, by, w_clear, 38, [this] { tree_goal_ = -1; });
+    bx += w_clear + gap;
     if (can_research) {
-        bx += 148;
-        wide_button(cr, bx, by, 140, 38, "Research", "", true, hover(bx, by, 140, 38));
+        wide_button(cr, bx, by, w_research, 38, "Research", "", true, hover(bx, by, w_research, 38));
         const int sel = tree_selected_;
-        hot(bx, by, 140, 38, [this, me, sel] {
+        hot(bx, by, w_research, 38, [this, me, sel] {
             if (g().set_research(me, static_cast<Advance>(sel))) {
                 // The choice now stands; leave the tree open so the path stays in view.
             }
         });
+        bx += w_research + gap;
     }
-    wide_button(cr, R - 140, by, 140, 38, "Close", "Esc", true, hover(R - 140, by, 140, 38));
-    hot(R - 140, by, 140, 38, [this] { close_top(); });
+    const double close_x = R - w_close;
+    wide_button(cr, close_x, by, w_close, 38, "Close", "Esc", true, hover(close_x, by, w_close, 38));
+    hot(close_x, by, w_close, 38, [this] { close_top(); });
     const std::string hint = "Drag, arrows or the wheel to pan  ·  Click to inspect";
-    const double hx = bx + (can_research ? 148 : 164);
-    const double hmax = (R - 148) - hx;
+    const double hx = bx;
+    const double hmax = close_x - gap - hx;
     if (hmax > 80) {
         cairo_save(cr);
         cairo_rectangle(cr, hx, by, hmax, 38);

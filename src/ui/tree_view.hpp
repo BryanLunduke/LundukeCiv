@@ -74,6 +74,7 @@ public:
 
 private:
     void clamp_pan();
+    void center_visible_y();
     void refresh_path();
     TreeLayoutParams params_for(double canvas_w, double canvas_h) const;
     void draw_node(cairo_t *cr, const TreeNodeBox &b, bool hover);
@@ -84,8 +85,8 @@ private:
     double pan_x_ = 0, pan_y_ = 0;
     double cx_ = 0, cy_ = 0, cw_ = 0, ch_ = 0;
     int hover_ = -1;
-    double inner_top_ = 26;   // era label strip
-    double inner_bot_ = 18;   // scrollbar strip
+    double inner_top_ = 22;   // era label strip
+    double inner_bot_ = 16;   // scrollbar strip
     double inner_x_ = 6;
 };
 
