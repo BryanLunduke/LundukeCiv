@@ -192,6 +192,7 @@ struct GameEvent {
     int arg = -1;
     int city = -1;
     std::string name;   // the city's name (it may be gone by the time it shows)
+    std::string how;    // Advance: how it was learned (empty: the wise men found it)
 };
 
 struct CombatResult {
@@ -398,7 +399,7 @@ public:
     int research_ratio(int civ) const;
     int research_cost(int civ) const;
     static constexpr int kMinResearchCost = 10;   // no advance costs fewer bulbs
-    void learn(int civ, Advance a);
+    void learn(int civ, Advance a, const std::string &how = {});
     // The DOS game asks what to study only when an advance is found: once
     // bulbs are gathered toward one, the choice stands until it is found.
     // Surplus bulbs are lost when an advance is found (research starts

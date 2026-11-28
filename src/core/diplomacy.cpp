@@ -250,7 +250,7 @@ bool Game::settle(const Talk &t, bool accept, std::string *what)
         break;
     case TalkKind::TechDemand:
         if (accept && t.tech != Advance::None) {
-            learn(a, t.tech);
+            learn(a, t.tech, "A treaty brings you the secret of");
             out = "The " + civs[a].name + " learn " + advance_info(t.tech).name + ".";
         } else {
             accept = false;
@@ -272,7 +272,7 @@ bool Game::settle(const Talk &t, bool accept, std::string *what)
         break;
     case TalkKind::TechForPeace:
         if (accept) {
-            if (t.tech != Advance::None) learn(b, t.tech);
+            if (t.tech != Advance::None) learn(b, t.tech, "A treaty brings you the secret of");
             make_peace(a, b);
             out = "Peace between the " + civs[a].name + " and the " + civs[b].name + "; the " + civs[b].name + " learn " +
                   advance_info(t.tech).name + ".";

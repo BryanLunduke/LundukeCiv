@@ -373,7 +373,7 @@ void Game::complete_wonder(City &c, Wonder w)
             }
             if (civ.research == Advance::None) break;
             const Advance a = civ.research;
-            learn(c.owner, a);
+            learn(c.owner, a, "Darwin's Voyage has revealed the secret of");
             say(c.owner, MsgKind::Tech, std::string("Darwin's Voyage: your scientists discover ") + advance_info(a).name + "!");
             if (civ.ai) choose_research_ai(c.owner);
         }
@@ -497,13 +497,14 @@ void Game::update_tech_catchup()
     tech_catchup = year_for_turn(turn) < 0 ? 0 : std::clamp(most - (turn - 1) / 9, 0, 6);
 }
 
-void Game::learn(int civ, Advance a)
+void Game::learn(int civ, Advance a, const std::string &how)
 {
     if (civ == human && !civs[civ].ai && a != Advance::None) {
         GameEvent e;
         e.kind = EventKind::Advance;
         e.civ = civ;
         e.arg = static_cast<int>(a);
+        e.how = how;
         events.push_back(e);
     }
     if (a == Advance::FutureTech) {
@@ -1476,7 +1477,7 @@ std::string Game::diplomat_act(int unit_id, int tx, int ty, DiploAction a)
             if (civs[them].techs[t] && !civs[me].techs[t]) opts.push_back(t);
         }
         const int t = opts[rng.below(static_cast<int>(opts.size()))];
-        learn(me, static_cast<Advance>(t));
+        learn(me, static_cast<Advance>(t), "Your Diplomat has stolen the secret of");
         c->stolen |= static_cast<std::uint8_t>(1u << me);
         out = std::string("Your Diplomat steals the secret of ") + advance_info(t).name + " from " + c->name + "!";
         say(them, MsgKind::Bad, "The " + civs[me].name + " steal " + advance_info(t).name + " from " + c->name + ".", c->x, c->y);
@@ -2247,7 +2248,7 @@ void Game::enter_hut(int unit_id)
         } else {
             const Advance a = opts[rng.below(static_cast<int>(opts.size()))];
             say(owner, MsgKind::Tech, std::string("You have discovered scrolls of ancient wisdom: the secret of ") + advance_info(a).name + ".", x, y);
-            learn(owner, a);
+            learn(owner, a, "You have discovered scrolls of ancient wisdom: the secret of");
             if (civs[owner].ai && civs[owner].research == Advance::None) choose_research_ai(owner);
             return;
         }
@@ -2341,7 +2342,7 @@ void Game::capture_city(City &c, int new_owner)
     if (!civs[new_owner].barbarian && !civs[old].barbarian) {
         const Advance a = capture_tech(new_owner, old);
         if (a != Advance::None) {
-            learn(new_owner, a);
+            learn(new_owner, a, "In " + c.name + " your scholars find the secret of");
             say(new_owner, MsgKind::Tech, std::string("In ") + c.name + " your scholars find the secret of " + advance_info(a).name + ".", c.x, c.y);
         }
     }
@@ -3263,7 +3264,7 @@ void Game::start_turn_for(int ci)
                 if (k != ci && civs[k].alive && !civs[k].barbarian && civs[k].techs[a]) ++knowers;
             }
             if (knowers >= 2) {
-                learn(ci, static_cast<Advance>(a));
+                learn(ci, static_cast<Advance>(a), "The Great Library has given you the secret of");
                 say(ci, MsgKind::Tech, std::string("The Great Library gives you ") + advance_info(a).name + ".");
                 break;
             }
