@@ -844,6 +844,39 @@ void Game::ai_unit(Unit &start)
     }
 }
 
+Government Game::ai_government(int ci) const
+{
+    // DOS (AIEngine, CityWorker): the Republic when the trade it brings
+    // outweighs the discontent of troops in the field -- each weighs less
+    // for a civilized people and where a Marketplace calms the city -- and
+    // not while at war with a people that is ahead in science; Communism for
+    // a big empire; otherwise Monarchy.
+    const Civ &c = civs[ci];
+    const int ideology = c.tribe >= 0 ? tribe_info(c.tribe).ideology : 0;
+    int own = 0, score = 0;
+    for (const City &ct : cities) {
+        if (ct.owner != ci) continue;
+        ++own;
+        for (const auto &w : ct.worked) score += tile_yield(ct.x + w.first, ct.y + w.second, ci, false).trade > 0;
+    }
+    for (const Unit &u : units) {
+        if (u.owner != ci || !is_military(u.type) || unit_info(u.type).attack == 0) continue;
+        const City *in = city_at(u.x, u.y);
+        if (in && in->owner == ci) continue;
+        const City *home = city(u.home);
+        score -= (home && home->has(Building::Marketplace) ? 4 : 6) - 2 * ideology;
+    }
+    for (int o = 0; o < static_cast<int>(civs.size()); ++o) {
+        if (o != ci && civs[o].alive && !civs[o].barbarian && at_war(ci, o) && techs_known(o) > techs_known(ci)) score = -999;
+    }
+    // Once a Republic, it takes clear trouble to give it up.
+    if (c.govt == Government::Republic) score += 8 + own;
+    if (has(ci, Advance::Republic) && score >= 0) return Government::Republic;
+    if (has(ci, Advance::Communism) && own > 10) return Government::Communism;
+    if (has(ci, Advance::Monarchy)) return Government::Monarchy;
+    return Government::Despotism;
+}
+
 void Game::ai_play(int ci)
 {
     Civ &c = civs[ci];
@@ -856,7 +889,12 @@ void Game::ai_play(int ci)
         for (const Civ &o : civs) rival |= &o != &c && o.launch_turn >= 0;
         if ((ss.success_pct >= 100 && ss.pairs >= 2) || rival) launch(ci);
     }
-    if (c.govt == Government::Despotism && has(ci, Advance::Monarchy)) revolution(ci, Government::Monarchy);
+    // DOS (AIEngine): every eighth turn the ruler weighs its government; a
+    // Despot moves to Monarchy as soon as it can.
+    if (c.govt != Government::Anarchy) {
+        const Government want = ai_government(ci);
+        if (want != c.govt && (((ci + turn) & 7) == 0 || c.govt == Government::Despotism)) revolution(ci, want);
+    }
     if (c.govt != Government::Anarchy) {
         const int mx = government_info(c.govt).max_rate;
         int sci = mx, tax = 10 - mx, lux = 0;

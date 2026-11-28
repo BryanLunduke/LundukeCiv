@@ -349,3 +349,33 @@ TEST(ai_space_part_balance)
     b.build = kSpaceBase + static_cast<int>(SpacePart::Module);
     CHECK(g.ai_space_part(0, aid) != static_cast<int>(SpacePart::Module));
 }
+
+TEST(ai_government)
+{
+    // DOS: the Republic when trade outweighs troops in the field and no
+    // war with a people ahead in science; Communism for an empire of more
+    // than ten cities; otherwise Monarchy.
+    Game g = flat_game();
+    for (int i = 0; i < 3; ++i) town(g, 0, 6 + i * 5, 10, 3, "Town");
+    Civ &c = g.civs[0];
+    c.techs[static_cast<int>(Advance::Monarchy)] = true;
+    CHECK(g.ai_government(0) == Government::Monarchy);
+    c.techs[static_cast<int>(Advance::Republic)] = true;
+    CHECK(g.ai_government(0) == Government::Republic);
+    // An army in the field: Monarchy.
+    const int home = g.cities.front().id;
+    for (int i = 0; i < 3; ++i) g.unit(place(g, 0, UnitType::Legion, 30 + i, 30))->home = home;
+    CHECK(g.ai_government(0) == Government::Monarchy);
+    // A big empire with Communism known.
+    c.techs[static_cast<int>(Advance::Communism)] = true;
+    for (int i = 0; i < 8; ++i) town(g, 0, 6 + i * 5, 20, 3, "More");
+    CHECK(g.ai_government(0) == Government::Communism);
+    // Peace at home, but war with a people further ahead: no Republic.
+    for (size_t i = 0; i < g.units.size();)
+        if (g.units[i].type == UnitType::Legion) g.units.erase(g.units.begin() + static_cast<long>(i)); else ++i;
+    c.techs[static_cast<int>(Advance::Communism)] = false;
+    CHECK(g.ai_government(0) == Government::Republic);
+    for (int a = 0; a < 20; ++a) g.civs[1].techs[a] = true;
+    g.declare_war(1, 0);
+    CHECK(g.ai_government(0) == Government::Monarchy);
+}

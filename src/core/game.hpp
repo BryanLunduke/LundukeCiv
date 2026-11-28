@@ -602,6 +602,7 @@ public:
     // --- AI
     void ai_play(int civ);
     int ai_space_part(int civ, int city_id, bool frame_only = false) const;   // the part to build next, -1 none
+    Government ai_government(int civ) const;   // the government the ruler wants
     // Computer rulers overseas (ai_navy.cpp): passengers waiting for a ship
     // (at x, y, or anywhere with x < 0), a free site on another landmass,
     // and the ship or aircraft a city should build (-1 none).
