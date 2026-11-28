@@ -9,6 +9,7 @@
 #include "app.hpp"
 
 #include "databank.hpp"
+#include "tech_tree.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -113,6 +114,7 @@ void App::draw_dialog(cairo_t *cr, Dialog &d)
     case DialogKind::FindCity: draw_find_city(cr, d); break;
     case DialogKind::Options: draw_options(cr, d); break;
     case DialogKind::Event: draw_event(cr, d); break;
+    case DialogKind::TechTree: draw_tech_tree(cr, d); break;
     default: break;
     }
 }
@@ -1422,6 +1424,7 @@ void App::draw_help(cairo_t *cr, Dialog &d)
         {"C  H", "Center on the unit, on the capital"},
         {"+  -  wheel", "Zoom"},
         {"T  A  V", "Tax rates, science, cities"},
+        {"F6", "Technology Tree"},
         {"O  Y  E  F9", "Wonders, spaceship, Databank, score"},
         {"Ctrl+S  L  F", "Save, load, find a city"},
         {"F3  Shift+R", "Foreign affairs, revolution"},
@@ -2509,6 +2512,133 @@ void App::draw_event(cairo_t *cr, Dialog &d)
     }
     wide_button(cr, bx, by, 140, 38, "OK", "Enter", true, hover(bx, by, 140, 38));
     hot(bx, by, 140, 38, [this] { close_top(); });
+}
+
+void App::open_tech_tree()
+{
+    Dialog d;
+    d.kind = DialogKind::TechTree;
+    d.title = "Technology Tree";
+    open(d);
+    tree_center_pending_ = true;
+    tree_dragging_ = false;
+}
+
+void App::draw_tech_tree(cairo_t *cr, Dialog &d)
+{
+    (void)d;
+    if (!game_) return;
+    const int me = human();
+    tree_view_.set_model(make_advance_tree_model(g(), me, tree_goal_));
+
+    const double dx = 10, dy = geo_.menu_h + geo_.band_h + 6;
+    const double dw = geo_.win_w - 20, dh = geo_.win_h - dy - geo_.status_h - 6;
+    double cy = dialog_frame(cr, dx, dy, dw, dh, "Technology Tree");
+    const double L = dx + 20, R = dx + dw - 20;
+    const auto &model = tree_view_.model();
+    text(cr, kUiFont, model.title_line, L, cy, kSlateDim);
+    cy += 20;
+    if (!model.research_name.empty()) {
+        text(cr, kBoldFont, "Researching " + model.research_name, L, cy, kSlateGold);
+        text_right(cr, kUiFont, model.research_right, R, cy, kSlateDim);
+        cy += 22;
+        progress(cr, L, cy, R - L, 8, model.research_frac, kSlateGold);
+        cy += 16;
+    } else {
+        text(cr, kBoldFont, "Your wise men ask: what shall we study next?", L, cy, kSlateGold);
+        cy += 24;
+    }
+
+    // Goal chip + state legend.
+    std::string goal_label = "GOAL  —";
+    if (tree_goal_ >= 0 && tree_goal_ < kAdvanceCount) goal_label = std::string("GOAL  ") + advance_info(tree_goal_).name;
+    const Metrics gm = measure(cr, kSmallBold, goal_label);
+    const double chip_w = gm.w + 16, chip_h = gm.h + 8;
+    round_rect(cr, L, cy, chip_w, chip_h, 6);
+    set(cr, hex(0x3E4A5E));
+    cairo_fill_preserve(cr);
+    cairo_set_line_width(cr, 1.5);
+    set(cr, kSlateGold);
+    cairo_stroke(cr);
+    text(cr, kSmallBold, goal_label, L + 8, cy + 4, kSlateGold);
+
+    struct Leg { const char *label; Ink fill; Ink stroke; };
+    const Leg legs[] = {
+        {"Known", hex(0x2F3C4C), hex(0x3C4859)},
+        {"Researching", hex(0x3E4A5E), kSlateGold},
+        {"Available", hex(0x313C4C), kSlateGood},
+        {"Locked", hex(0x1A212B), hex(0x2A3340)},
+        {"Goal path", hex(0x3E4A5E), kSlateGold},
+    };
+    double lx = L + chip_w + 16;
+    const double ly = cy + 4;
+    for (const Leg &leg : legs) {
+        round_rect(cr, lx, ly, 16, 12, 3);
+        set(cr, leg.fill);
+        cairo_fill_preserve(cr);
+        cairo_set_line_width(cr, 1.4);
+        set(cr, leg.stroke);
+        cairo_stroke(cr);
+        const Metrics tm = measure(cr, kTagFont, leg.label);
+        text(cr, kTagFont, leg.label, lx + 21, ly + (12 - tm.h) / 2, kSlateDim);
+        lx += 21 + tm.w + 14;
+    }
+    cy += chip_h + 10;
+
+    const double footer_h = 54;
+    const double canvas_x = dx + 14, canvas_y = cy;
+    const double canvas_w = dw - 28;
+    const double canvas_h = (dy + dh - footer_h) - canvas_y - 6;
+    tree_view_.set_canvas(canvas_x, canvas_y, canvas_w, canvas_h);
+    if (tree_center_pending_) {
+        tree_center_pending_ = false;
+        if (g().civs[me].research != Advance::None) tree_view_.center_on(static_cast<int>(g().civs[me].research));
+        else if (tree_goal_ >= 0) tree_view_.center_on(tree_goal_);
+    }
+    tree_view_.draw_canvas(cr, mouse_x_, mouse_y_);
+    const int tip = tree_view_.hovered() >= 0 ? tree_view_.hovered() : -1;
+    if (tip >= 0) tree_view_.draw_tooltip(cr, mouse_x_, mouse_y_, tip);
+
+    const double by = dy + dh - 48;
+    const bool can_research = tree_selected_ >= 0 && g().can_change_research(me) &&
+                              g().can_research(me, static_cast<Advance>(tree_selected_));
+    double bx = L;
+    wide_button(cr, bx, by, 168, 38, "Center on Research", "C", false, hover(bx, by, 168, 38));
+    hot(bx, by, 168, 38, [this] {
+        if (!game_) return;
+        if (g().civs[human()].research != Advance::None) tree_view_.center_on(static_cast<int>(g().civs[human()].research));
+        else if (tree_goal_ >= 0) tree_view_.center_on(tree_goal_);
+    });
+    bx += 176;
+    wide_button(cr, bx, by, 140, 38, "Set as Goal", "G", tree_selected_ >= 0, hover(bx, by, 140, 38), tree_selected_ >= 0);
+    hot(bx, by, 140, 38, [this] {
+        if (tree_selected_ >= 0) tree_goal_ = tree_selected_;
+    });
+    bx += 148;
+    wide_button(cr, bx, by, 156, 38, "Clear Goal", "", false, hover(bx, by, 156, 38), tree_goal_ >= 0);
+    hot(bx, by, 156, 38, [this] { tree_goal_ = -1; });
+    if (can_research) {
+        bx += 148;
+        wide_button(cr, bx, by, 140, 38, "Research", "", true, hover(bx, by, 140, 38));
+        const int sel = tree_selected_;
+        hot(bx, by, 140, 38, [this, me, sel] {
+            if (g().set_research(me, static_cast<Advance>(sel))) {
+                // The choice now stands; leave the tree open so the path stays in view.
+            }
+        });
+    }
+    wide_button(cr, R - 140, by, 140, 38, "Close", "Esc", true, hover(R - 140, by, 140, 38));
+    hot(R - 140, by, 140, 38, [this] { close_top(); });
+    const std::string hint = "Drag, arrows or the wheel to pan  ·  Click to inspect";
+    const double hx = bx + (can_research ? 148 : 164);
+    const double hmax = (R - 148) - hx;
+    if (hmax > 80) {
+        cairo_save(cr);
+        cairo_rectangle(cr, hx, by, hmax, 38);
+        cairo_clip(cr);
+        text(cr, kTagFont, hint, hx, by + 12, kSlateDim);
+        cairo_restore(cr);
+    }
 }
 
 } // namespace ui

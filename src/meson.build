@@ -7,7 +7,8 @@ civart = static_library(
   dependencies: [cairo_dep],
 )
 
-game_sources = files('main.cpp', 'ui/app.cpp', 'ui/dialogs.cpp', 'ui/draw.cpp', 'ui/pad.cpp')
+game_sources = files('main.cpp', 'ui/app.cpp', 'ui/dialogs.cpp', 'ui/draw.cpp', 'ui/pad.cpp',
+                     'ui/tree_layout.cpp', 'ui/tree_view.cpp', 'ui/tech_tree.cpp')
 game_link_args = []
 if host_machine.system() == 'windows'
   game_link_args += ['-mwindows']

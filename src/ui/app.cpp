@@ -8,6 +8,7 @@
 #include "app.hpp"
 
 #include "databank.hpp"
+#include "tech_tree.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -1028,7 +1029,11 @@ bool App::key(const KeyEvent &k)
         // The arrow keys (and Tab) move a focus ring through the dialog's
         // buttons and rows; Enter or Space then chooses the one in focus.
         // The first arrow press shows the ring on the default choice.
-        const bool own_arrows = d.kind == DialogKind::FindCity || d.kind == DialogKind::Databank ||
+        const bool tree_pan = d.kind == DialogKind::TechTree &&
+                              (k.key == Key::Up || k.key == Key::Down || k.key == Key::Left || k.key == Key::Right ||
+                               k.key == Key::UpLeft || k.key == Key::UpRight || k.key == Key::DownLeft ||
+                               k.key == Key::DownRight || k.key == Key::Home || k.key == Key::End);
+        const bool own_arrows = d.kind == DialogKind::FindCity || d.kind == DialogKind::Databank || tree_pan ||
                                 ((d.kind == DialogKind::Message || d.kind == DialogKind::Report) && d.scroll_max > 0 &&
                                  (k.key == Key::Up || k.key == Key::Down));
         if (own_arrows && (d.kind == DialogKind::Message || d.kind == DialogKind::Report)) {
@@ -1179,6 +1184,27 @@ bool App::key(const KeyEvent &k)
                 d.dx = 0;
             }
             if (k.key == Key::Escape || k.key == Key::Enter) close_top();
+            return true;
+        }
+        if (d.kind == DialogKind::TechTree) {
+            const double step = 80;
+            if (k.key == Key::Left || k.key == Key::UpLeft || k.key == Key::DownLeft) tree_view_.pan_by(-step, 0);
+            if (k.key == Key::Right || k.key == Key::UpRight || k.key == Key::DownRight) tree_view_.pan_by(step, 0);
+            if (k.key == Key::Up || k.key == Key::UpLeft || k.key == Key::UpRight) tree_view_.pan_by(0, -step);
+            if (k.key == Key::Down || k.key == Key::DownLeft || k.key == Key::DownRight) tree_view_.pan_by(0, step);
+            if (k.key == Key::Home) tree_view_.jump_home();
+            if (k.key == Key::End) tree_view_.jump_end();
+            if (k.key == Key::Escape) close_top();
+            if (k.key == Key::Backspace) tree_goal_ = -1;
+            if (k.ch == 'c') {
+                if (g().civs[human()].research != Advance::None)
+                    tree_view_.center_on(static_cast<int>(g().civs[human()].research));
+                else if (tree_goal_ >= 0) tree_view_.center_on(tree_goal_);
+            }
+            if (k.ch == 'g' && tree_selected_ >= 0) tree_goal_ = tree_selected_;
+            if (k.ch == 'r' && tree_selected_ >= 0) {
+                g().set_research(human(), static_cast<Advance>(tree_selected_));
+            }
             return true;
         }
         if (d.kind == DialogKind::CustomWorld && k.key == Key::Enter) {
@@ -1355,6 +1381,9 @@ bool App::key(const KeyEvent &k)
         open(d);
         return true;
     }
+    case '@':   // F6
+        open_tech_tree();
+        return true;
     case 'a': {
         Dialog d;
         d.kind = DialogKind::Science;
@@ -1417,6 +1446,24 @@ bool App::mouse_down(double x, double y, int button)
     key_nav_ = false;
     mouse_x_ = x;
     mouse_y_ = y;
+    if (!dialogs_.empty() && dialogs_.back().kind == DialogKind::TechTree) {
+        for (auto it = hots_.rbegin(); it != hots_.rend(); ++it) {
+            if (it->contains(x, y) && button == 1) {
+                auto fn = it->fn;
+                fn();
+                return true;
+            }
+        }
+        if (tree_view_.in_canvas(x, y) && button == 1) {
+            tree_dragging_ = true;
+            tree_drag_moved_ = false;
+            tree_drag_x_ = x;
+            tree_drag_y_ = y;
+            tree_drag_hit_ = tree_view_.hit_node(x, y);
+            return true;
+        }
+        return true;
+    }
     // Topmost first.
     for (auto it = hots_.rbegin(); it != hots_.rend(); ++it) {
         if (it->contains(x, y)) {
@@ -1440,18 +1487,51 @@ bool App::mouse_down(double x, double y, int button)
     return false;
 }
 
-bool App::mouse_move(double x, double y)
+bool App::mouse_move(double x, double y, bool left_down)
 {
     if (std::fabs(x - mouse_x_) + std::fabs(y - mouse_y_) > 4) key_nav_ = false;
+    if (tree_dragging_ && left_down && !dialogs_.empty() && dialogs_.back().kind == DialogKind::TechTree) {
+        const double dx = x - tree_drag_x_, dy = y - tree_drag_y_;
+        if (std::fabs(dx) + std::fabs(dy) > 4) tree_drag_moved_ = true;
+        if (tree_drag_moved_) {
+            tree_view_.pan_by(-dx, -dy);
+            tree_drag_x_ = x;
+            tree_drag_y_ = y;
+        }
+        mouse_x_ = x;
+        mouse_y_ = y;
+        return true;
+    }
+    if (!left_down) tree_dragging_ = false;
     mouse_x_ = x;
     mouse_y_ = y;
     return true;
+}
+
+bool App::mouse_up(double x, double y, int button)
+{
+    mouse_x_ = x;
+    mouse_y_ = y;
+    if (button == 1 && tree_dragging_) {
+        tree_dragging_ = false;
+        if (!tree_drag_moved_ && tree_drag_hit_ >= 0 && !dialogs_.empty() &&
+            dialogs_.back().kind == DialogKind::TechTree) {
+            tree_selected_ = tree_drag_hit_;
+        }
+        return true;
+    }
+    return false;
 }
 
 bool App::wheel(double x, double y, double dy)
 {
     if (!dialogs_.empty()) {
         Dialog &d = dialogs_.back();
+        if (d.kind == DialogKind::TechTree && tree_view_.in_canvas(x, y)) {
+            // The tree is wide: the wheel pans left and right.
+            tree_view_.pan_by((dy > 0 ? -80 : 80), 0);
+            return true;
+        }
         if ((d.kind == DialogKind::Message || d.kind == DialogKind::Report) && d.scroll_max > 0) {
             d.scroll = std::clamp(d.scroll + (dy > 0 ? -1 : 1), 0, d.scroll_max);
             return true;
@@ -1554,6 +1634,7 @@ std::vector<App::MenuItem> App::menu_items(int menu)
     case 2:
         items.push_back({"Cities", "V", dialog(DialogKind::Cities, "Cities"), have});
         items.push_back({"Science", "A", dialog(DialogKind::Science, "Science Advisor"), have});
+        items.push_back({"Technology Tree", "F6", [this] { open_tech_tree(); }, have});
         items.push_back({"Foreign Affairs", "F3", dialog(DialogKind::Foreign, "Foreign Affairs"), have});
         items.push_back({"Wonders of the World", "O", dialog(DialogKind::Wonders, "Wonders of the World"), have});
         items.push_back({"Spaceship", "Y", dialog(DialogKind::Spaceship, "Spaceship"), have});

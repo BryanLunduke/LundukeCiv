@@ -53,6 +53,10 @@ ui::KeyEvent translate(const SDL_KeyboardEvent &e)
         k.key = ui::Key::Char;
         k.ch = '%';
         break;
+    case SDLK_F6:   // Technology Tree (T is Tax Rates)
+        k.key = ui::Key::Char;
+        k.ch = '@';
+        break;
     case SDLK_KP_PLUS:
     case SDLK_EQUALS:
     case SDLK_PLUS:
@@ -268,9 +272,12 @@ int main(int argc, char **argv)
                 case SDL_EVENT_MOUSE_BUTTON_DOWN:
                     dirty |= app.mouse_down(e.button.x, e.button.y, e.button.button == SDL_BUTTON_RIGHT ? 3 : 1);
                     break;
+                case SDL_EVENT_MOUSE_BUTTON_UP:
+                    dirty |= app.mouse_up(e.button.x, e.button.y, e.button.button == SDL_BUTTON_RIGHT ? 3 : 1);
+                    break;
                 case SDL_EVENT_MOUSE_MOTION:
                     if (std::fabs(e.motion.xrel) + std::fabs(e.motion.yrel) > 2) app.pointer_used();
-                    dirty |= app.mouse_move(e.motion.x, e.motion.y);
+                    dirty |= app.mouse_move(e.motion.x, e.motion.y, (e.motion.state & SDL_BUTTON_LMASK) != 0);
                     break;
                 case SDL_EVENT_MOUSE_WHEEL: {
                     float mx = 0, my = 0;

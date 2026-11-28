@@ -49,6 +49,7 @@ The top band shows the empire: civilization, year, treasury, tax · luxury · sc
 | C H | Center on the unit, on the capital |
 | + − wheel | Zoom 100–300% |
 | T A V | Tax rates, science, city list |
+| F6 | Technology Tree |
 | Ctrl+S Ctrl+L Ctrl+N | Save, load, new game |
 | Ctrl+F | Find a city by name |
 | F9 | Civilization Score |

@@ -23,3 +23,11 @@ foreach t : ['ship_capture', 'barbarian_restraint', 'hut_barbarians_gentle', 'ci
     'ai_space_part_balance', 'ai_government', 'ai_rates_pay_upkeep', 'ai_army_upkeep', 'ai_retakes_barbarian_city']
   test(t, qa_tests, args: [t], timeout: 120, suite: 'qa')
 endforeach
+
+techtree_tests = executable('techtree_tests',
+  files('techtree_tests.cpp', '../src/ui/tree_layout.cpp'),
+  include_directories: [civcore_inc, include_directories('../src/ui')],
+  dependencies: civcore_dep)
+foreach t : ['layout_from_data', 'add_remove_advance', 'cycle_safety', 'state_computation']
+  test(t, techtree_tests, args: [t], timeout: 60, suite: 'techtree')
+endforeach

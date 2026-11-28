@@ -13,6 +13,7 @@
 #include "game.hpp"
 #include "options.hpp"
 #include "pad_nav.hpp"
+#include "tree_view.hpp"
 #include "terrain_paint.hpp"
 
 #include <cairo.h>
@@ -68,6 +69,7 @@ enum class DialogKind {
     FindCity,      // field: the name typed, scroll: the row chosen
     Options,       // Game Options
     Event,         // other: EventKind, scroll: arg, city_id, field: city name, dx: the other civ
+    TechTree,      // Technology Tree (F6)
 };
 
 struct Dialog {
@@ -109,7 +111,8 @@ public:
     bool key(const KeyEvent &k);
     bool text_input(const std::string &utf8);
     bool mouse_down(double x, double y, int button);
-    bool mouse_move(double x, double y);
+    bool mouse_move(double x, double y, bool left_down = false);
+    bool mouse_up(double x, double y, int button);
     bool wheel(double x, double y, double dy);
     bool tick(unsigned long long ms);   // blink timer, held D-pad, right-stick pan
     // Gamepad, as in Lunduke City 2: the window code passes button presses
@@ -286,6 +289,8 @@ private:
     bool audience_ok(int civ, civ::Proposal p);   // the option is open this year
     void audience(int civ, civ::Proposal p);
     void open_databank(int topic, const std::string &select = std::string());
+    void open_tech_tree();
+    void draw_tech_tree(cairo_t *cr, Dialog &d);
 
     struct MenuItem {
         std::string label;
@@ -293,6 +298,16 @@ private:
         std::function<void()> fn;
         bool enabled = true;
     };
+    // Technology Tree (UI state; the goal is not saved).
+    DependencyTreeView tree_view_;
+    int tree_goal_ = -1;        // advance id, or -1
+    int tree_selected_ = -1;
+    bool tree_dragging_ = false;
+    bool tree_drag_moved_ = false;
+    bool tree_center_pending_ = false;
+    int tree_drag_hit_ = -1;
+    double tree_drag_x_ = 0, tree_drag_y_ = 0;
+
     std::vector<MenuItem> menu_items(int menu);
 };
 
