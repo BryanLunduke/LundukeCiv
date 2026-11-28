@@ -325,10 +325,16 @@ static void test_huts()
     g.turn = turn_for_year(-2000);
     CHECK(g.hut_outcome(0, 30, 20, 2) == HutOutcome::Gold);
     // Roll 3: with no city of our own, or close to one, mercenaries;
-    // otherwise barbarians.
+    // otherwise barbarians (and, gentler than DOS, not while we have a
+    // single city or before turn 50).
     CHECK(g.hut_outcome(0, 30, 20, 3) == HutOutcome::Mercenaries);
     town(g, 0, 40, 20, 3, "Ours");
+    CHECK(g.hut_outcome(0, 30, 20, 3) == HutOutcome::Mercenaries);
+    town(g, 0, 40, 30, 3, "Ours Too");
     CHECK(g.hut_outcome(0, 30, 20, 3) == HutOutcome::Barbarians);
+    g.turn = Game::kBarbarianStartTurn - 1;
+    CHECK(g.hut_outcome(0, 30, 20, 3) == HutOutcome::Mercenaries);
+    g.turn = turn_for_year(-2000);
     CHECK(g.hut_outcome(0, 22, 20, 3) == HutOutcome::Mercenaries);
 
     // Entering villages, many times over: every outcome is one of the five
@@ -339,6 +345,7 @@ static void test_huts()
         h.rng.state = 1000 + static_cast<unsigned>(k) * 7919u;
         h.turn = turn_for_year(-2000);
         town(h, 0, 10, 10, 3, "Home");
+        town(h, 0, 10, 40, 3, "Far Home");
         const int dist = 2 + k % 6;   // 2, 3: mercenaries likely; 4, 5: a free city possible; 6, 7: not
         h.map.at(10 + dist, 10).hut = true;
         const int u = place(h, 0, UnitType::Legion, 9 + dist, 10);
@@ -364,7 +371,7 @@ static void test_huts()
             }
             if (raiders) {
                 ++seen[static_cast<int>(HutOutcome::Barbarians)];
-                CHECK_EQ(raiders, 3);   // one city: every third square of eight
+                CHECK_EQ(raiders, 4);   // two cities: every second square of eight
             } else {
                 CHECK_EQ(mercs, 1);
                 CHECK_EQ(static_cast<long long>(h.units.size()), units + 1);

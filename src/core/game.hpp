@@ -485,6 +485,7 @@ public:
     bool senate_blocks(int a, int b) const { return senate(a) && has_treaty(a, b); }
 
     // --- the Civilization Score, the end in 2100 AD and retirement
+    static constexpr int kBarbarianStartTurn = 50;   // no raiders, from the sea or from villages, before this
     static constexpr int kEndYear = 2100;          // DOS: 2100 less 20 a level; here 2100 on every level
     static constexpr int kRetireWarningYears = 20; // "plans retirement in 20 years"
     static constexpr int kWonderPoints = 20;
@@ -577,6 +578,8 @@ public:
     int barbarian_civ() const;                      // index, -1 none
     bool is_barbarian(int civ) const { return civ >= 0 && civ < static_cast<int>(civs.size()) && civs[civ].barbarian; }
     void spawn_barbarians(bool force_sea = false, bool force_land = false);
+    void ai_barbarians(int civ);             // the raiders' moves for a turn
+    bool barbarians_spare(int civ) const;    // DOS: one city and under 100 gold: left alone
     int ransom(int unit_id, int tx, int ty);        // capture lone barbarian leaders: gold won
     // --- villages: what roll (0..3) gives for a unit of `owner` at x, y
     HutOutcome hut_outcome(int owner, int x, int y, int roll) const;
@@ -654,7 +657,6 @@ private:
     bool ai_landing(const Unit &ship, int tx, int ty, int &ox, int &oy) const;
     const City *ai_overseas_enemy(int ci, int fx, int fy) const;
     bool ai_has_ferry(int ci) const;
-    void ai_barbarians(int civ);
     bool barbarian_landing(int bc, UnitType ship, const std::vector<UnitType> &army);
     bool barbarian_uprising(int bc, const std::vector<UnitType> &army);
     void space_arrivals();

@@ -169,3 +169,70 @@ TEST(ship_capture)
     CHECK_EQ(g.unit(stray)->x, 12);
     CHECK_EQ(g.unit(stray)->y, 12);
 }
+
+// ---------------------------------------------------------------- barbarians
+
+TEST(barbarian_restraint)
+{
+    // DOS: barbarians leave a people with one city and under 100 gold
+    // alone, and a band with no city within eight squares breaks up.
+    Game g = flat_game();
+    const int bc = g.barbarian_civ();
+    CHECK(bc >= 0);
+    if (bc < 0) return;
+    City &c = town(g, 0, 20, 20, 3, "Lonely");
+    const int cid = c.id;
+    g.civs[0].gold = 20;
+    CHECK(g.barbarians_spare(0));
+    const int raider = place(g, bc, UnitType::Legion, 22, 20);
+    for (int t = 0; t < 6; ++t) {
+        g.turn = 101 + t * 4;   // ((id + turn) & 3) != 0 for most: the band stays
+        for (Unit &u : g.units) u.moves = g.full_moves(u);
+        g.ai_barbarians(bc);
+    }
+    CHECK(g.city(cid) != nullptr && g.city(cid)->owner == 0);
+    // Rich, or with a second city, they come.
+    g.civs[0].gold = 150;
+    CHECK(!g.barbarians_spare(0));
+    g.civs[0].gold = 20;
+    town(g, 0, 20, 30, 3, "Second");
+    CHECK(!g.barbarians_spare(0));
+    bool attacked = false;
+    for (int t = 0; t < 8 && !attacked; ++t) {
+        g.turn = 130 + t;
+        for (Unit &u : g.units) u.moves = g.full_moves(u);
+        const size_t before = g.units.size();
+        g.ai_barbarians(bc);
+        const Unit *r = g.unit(raider);
+        attacked = !r || g.units.size() != before || g.city(cid) == nullptr || g.city(cid)->owner != 0 ||
+                   (r && g.map.distance(r->x, r->y, 20, 20) <= 1);
+    }
+    CHECK(attacked);
+
+    // A band far from any city breaks up within four turns.
+    Game h = flat_game();
+    town(h, 0, 10, 10, 3, "Home");
+    const int lost = place(h, h.barbarian_civ(), UnitType::Legion, 40, 30);
+    for (int t = 0; t < 4; ++t) {
+        h.turn = 100 + t;
+        for (Unit &u : h.units) u.moves = h.full_moves(u);
+        h.ai_barbarians(h.barbarian_civ());
+    }
+    CHECK(h.unit(lost) == nullptr);
+}
+
+TEST(hut_barbarians_gentle)
+{
+    // No horde from a village before turn 50 or while the people that
+    // opens it has a single city; with two cities, later on, there can be.
+    Game g = flat_game();
+    town(g, 0, 10, 10, 3, "Home");
+    g.turn = 20;
+    CHECK(g.hut_outcome(0, 30, 30, 3) == HutOutcome::Mercenaries);
+    g.turn = 120;
+    CHECK(g.hut_outcome(0, 30, 30, 3) == HutOutcome::Mercenaries);
+    town(g, 0, 10, 20, 3, "Two");
+    CHECK(g.hut_outcome(0, 30, 30, 3) == HutOutcome::Barbarians);
+    g.turn = Game::kBarbarianStartTurn - 1;
+    CHECK(g.hut_outcome(0, 30, 30, 3) == HutOutcome::Mercenaries);
+}
