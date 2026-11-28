@@ -379,3 +379,30 @@ TEST(ai_government)
     g.declare_war(1, 0);
     CHECK(g.ai_government(0) == Government::Monarchy);
 }
+
+TEST(ai_rates_pay_upkeep)
+{
+    // The computer sets the lowest tax that pays for its buildings, so
+    // nothing is sold for want of gold.
+    Game g = flat_game();
+    for (Tile &t : g.map.tiles) t.road = t.terrain != Terrain::Ocean;
+    Civ &c = g.civs[0];
+    c.govt = Government::Monarchy;
+    c.gold = 0;
+    for (int i = 0; i < 4; ++i) {
+        City &ct = town(g, 0, 6 + i * 6, 10, 6, "Town");
+        for (Building b : {Building::Temple, Building::Library, Building::Marketplace, Building::Granary}) ct.add(b);
+        g.update_city(ct);
+    }
+    g.set_rates(0, 0, 0, 10);
+    g.ai_rates(0);
+    int income = 0, upkeep = 0;
+    for (const City &ct : g.cities) {
+        income += ct.stats.tax;
+        for (int b = 0; b < kBuildingCount; ++b)
+            if (ct.has(static_cast<Building>(b))) upkeep += g.building_upkeep(0, b);
+    }
+    CHECK(upkeep > 0);
+    CHECK(income >= upkeep);
+    CHECK(c.sci > 0);   // but no higher than it needs
+}

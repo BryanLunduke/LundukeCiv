@@ -301,8 +301,16 @@ void Game::ai_city(City &c)
             }
         }
     }
+    // A building is only worth its upkeep if the treasury can carry it;
+    // a Marketplace pays its own way in a city with trade.
+    const int margin = ai_gold_margin(ci);
+    auto affordable = [&](Building b) {
+        const int up = building_upkeep(ci, static_cast<int>(b));
+        if (up <= 0 || up <= margin) return true;
+        return (b == Building::Marketplace || b == Building::Bank) && st.raw.trade >= 6;
+    };
     for (const Want &w : wants) {
-        if (!w.ok || !can_build(c, false, static_cast<int>(w.b))) continue;
+        if (!w.ok || !can_build(c, false, static_cast<int>(w.b)) || !affordable(w.b)) continue;
         pick(false, static_cast<int>(w.b));
         return;
     }
@@ -317,7 +325,7 @@ void Game::ai_city(City &c)
         const Building bb = static_cast<Building>(b);
         if (bb == Building::Palace || bb == Building::SdiDefense || bb == Building::Barracks) continue;
         if (bb == Building::CityWalls && !front) continue;
-        if (can_build(c, false, b) && building_info(b).upkeep <= (c.size >= 4 ? 2 : 1)) {
+        if (can_build(c, false, b) && building_info(b).upkeep <= (c.size >= 4 ? 2 : 1) && affordable(bb)) {
             pick(false, b);
             return;
         }
@@ -331,7 +339,27 @@ void Game::ai_city(City &c)
         pick(true, static_cast<int>(UnitType::Settlers));
         return;
     }
-    pick(true, best_unit(false));
+    // Rather than an ever larger standing army: Caravans, which help build
+    // wonders or open trade routes, or a wonder of our own.
+    int caravans = 0;
+    for (const Unit &u : units) caravans += u.owner == ci && u.type == UnitType::Caravan;
+    if (can_build(c, true, static_cast<int>(UnitType::Caravan)) && caravans < 2 + own_cities / 3) {
+        pick(true, static_cast<int>(UnitType::Caravan));
+        return;
+    }
+    for (int w = 0; w < kWonderCount; ++w) {
+        if (can_build(c, false, kWonderBase + w)) {
+            pick(false, kWonderBase + w);
+            return;
+        }
+    }
+    if (own_military < 2 * own_cities + 2) {
+        pick(true, best_unit(war_here && rng.chance(0.5)));
+        return;
+    }
+    // Truly nothing: a worker to improve the land, or a defender in a
+    // city too small to spare the people.
+    pick(true, c.size >= 3 ? static_cast<int>(UnitType::Settlers) : best_unit(false));
 }
 
 // ai_diplomacy: see diplomacy.cpp.
@@ -877,6 +905,57 @@ Government Game::ai_government(int ci) const
     return Government::Despotism;
 }
 
+int Game::ai_gold_margin(int ci) const
+{
+    // Gold a turn left over with taxes as high as the government allows,
+    // after paying for buildings (an estimate from the cities' current tax).
+    const Civ &c = civs[ci];
+    const int mx = government_info(c.govt).max_rate;
+    int income = 0, upkeep = 0;
+    for (const City &ct : cities) {
+        if (ct.owner != ci) continue;
+        income += ct.stats.tax;
+        for (int b = 0; b < kBuildingCount; ++b) {
+            if (ct.has(static_cast<Building>(b))) upkeep += building_upkeep(ci, b);
+        }
+        if (!ct.build_unit && ct.build >= 0 && ct.build < kBuildingCount) upkeep += building_upkeep(ci, ct.build);
+    }
+    if (c.tax > 0) income = income * mx / c.tax;
+    return income - upkeep;
+}
+
+void Game::ai_rates(int ci)
+{
+    // As much science as the treasury allows: the lowest tax that pays for
+    // the buildings (and puts something by while the treasury is thin).
+    Civ &c = civs[ci];
+    const int mx = government_info(c.govt).max_rate;
+    int lux = 0, idle = 0, citizens = 0, own = 0, upkeep = 0;
+    for (const City &ct : cities) {
+        if (ct.owner != ci) continue;
+        ++own;
+        idle += ct.entertainers;
+        citizens += ct.size;
+        for (int b = 0; b < kBuildingCount; ++b) {
+            if (ct.has(static_cast<Building>(b))) upkeep += building_upkeep(ci, b);
+        }
+    }
+    // Some luxuries when cities have to keep many entertainers.
+    if (citizens > 0 && idle * 6 > citizens) lux = std::min(3, mx);
+    const int reserve = 40 + 5 * own;
+    const int need = upkeep + (c.gold < reserve ? std::max(2, own / 2) : 0);
+    const int lowest = std::max(0, 10 - mx - lux);
+    for (int tax = lowest; tax <= mx; ++tax) {
+        const int sci = 10 - tax - lux;
+        if (sci < 0) break;
+        if (sci > mx) continue;
+        if (c.tax != tax || c.lux != lux || c.sci != sci) set_rates(ci, tax, lux, sci);
+        int income = 0;
+        for (const City &ct : cities) income += ct.owner == ci ? ct.stats.tax : 0;
+        if (income >= need) return;
+    }
+}
+
 void Game::ai_play(int ci)
 {
     Civ &c = civs[ci];
@@ -895,34 +974,7 @@ void Game::ai_play(int ci)
         const Government want = ai_government(ci);
         if (want != c.govt && (((ci + turn) & 7) == 0 || c.govt == Government::Despotism)) revolution(ci, want);
     }
-    if (c.govt != Government::Anarchy) {
-        const int mx = government_info(c.govt).max_rate;
-        int sci = mx, tax = 10 - mx, lux = 0;
-        if (c.gold < 30) {
-            sci = std::max(10 - mx, 4);
-            tax = 10 - sci;
-        }
-        if (tax > mx) {
-            tax = mx;
-            lux = 10 - sci - tax;
-        }
-        // Some luxuries when cities have to keep entertainers.
-        int idle = 0, citizens = 0;
-        for (const City &ct : cities) {
-            if (ct.owner != ci) continue;
-            idle += ct.entertainers;
-            citizens += ct.size;
-        }
-        if (citizens > 0 && idle * 6 > citizens && lux == 0) {
-            lux = std::min(3, mx);
-            if (sci >= lux) {
-                sci -= lux;
-            } else {
-                tax -= lux;
-            }
-        }
-        if (c.sci != sci || c.tax != tax || c.lux != lux) set_rates(ci, tax, lux, sci);
-    }
+    if (c.govt != Government::Anarchy) ai_rates(ci);
     for (City &ct : cities) {
         if (ct.owner == ci && (!can_build(ct, ct.build_unit, ct.build) || ct.founded == turn || ct.shields == 0)) ai_city(ct);
     }

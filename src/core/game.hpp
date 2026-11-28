@@ -603,6 +603,9 @@ public:
     void ai_play(int civ);
     int ai_space_part(int civ, int city_id, bool frame_only = false) const;   // the part to build next, -1 none
     Government ai_government(int civ) const;   // the government the ruler wants
+    int ai_gold_margin(int civ) const;         // gold a turn to spare at the highest tax
+    void ai_rates(int civ);
+    void ai_city(City &c);
     // Computer rulers overseas (ai_navy.cpp): passengers waiting for a ship
     // (at x, y, or anywhere with x < 0), a free site on another landmass,
     // and the ship or aircraft a city should build (-1 none).
@@ -640,7 +643,6 @@ private:
     void choose_research_ai(int civ);
     void complete_wonder(City &c, Wonder w);
     void announce_wonder_start(const City &c);
-    void ai_city(City &c);
     void ai_unit(Unit &u);
     void ai_diplomacy(int civ);
     void meet(int ai, int other);          // one audience, if one is due
