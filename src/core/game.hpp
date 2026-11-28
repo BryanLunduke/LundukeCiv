@@ -425,6 +425,7 @@ public:
     Yield tile_yield(int x, int y, int civ, bool centre, bool celebrating = false) const;
     bool tile_free_for(const City &c, int x, int y) const;
     void update_city(City &c);            // recompute stats (and arrange workers unless manual)
+    void restore_city(City &c);           // after loading: keep the saved workers if they still fit
     void arrange_workers(City &c);
     // Everyone not on a worked square is a specialist: keep the taxmen and
     // scientists that still fit (none below size 5), the rest entertain.

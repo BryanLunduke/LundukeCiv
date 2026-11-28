@@ -285,3 +285,30 @@ TEST(civil_war_stacks)
         if (const City *h = g.city(u.home)) CHECK_EQ(h->owner, u.owner);
     }
 }
+
+// ---------------------------------------------------------------- saves
+
+TEST(ai_save_roundtrip)
+{
+    // A game of computer rulers loads exactly as it was saved, cities'
+    // specialists included, all through the game.
+    for (unsigned long long seed : {202ull, 505ull}) {
+        GameSettings s;
+        s.seed = seed;
+        s.civs = 7;
+        s.all_ai = true;
+        s.player_tribe = 0;
+        Game g = Game::create(s);
+        int differ = 0;
+        for (int t = 0; t < 240; ++t) {
+            g.end_turn();
+            if (t % 20 != 19) continue;
+            const std::string a = save_game(g);
+            Game h;
+            std::string err;
+            CHECK(load_game(a, h, &err));
+            if (save_game(h) != a) ++differ;
+        }
+        CHECK_EQ(differ, 0);
+    }
+}

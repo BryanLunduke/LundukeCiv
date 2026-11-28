@@ -417,7 +417,7 @@ bool load_game(const std::string &text, Game &out, std::string *error)
         b.gold = 0;
         g.civs.push_back(b);
     }
-    for (City &c : g.cities) g.update_city(c);
+    for (City &c : g.cities) g.restore_city(c);
     g.refresh_visibility();
     out = std::move(g);
     return true;

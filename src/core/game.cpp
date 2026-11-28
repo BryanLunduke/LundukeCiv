@@ -912,6 +912,20 @@ void Game::update_city(City &c)
     ai_specialists(c);
 }
 
+void Game::restore_city(City &c)
+{
+    // A saved city keeps its workers and specialists as they were, so a
+    // game loads exactly as it was saved; only an arrangement that no
+    // longer fits is worked out afresh.
+    bool fits = static_cast<int>(c.worked.size()) + c.specialists() == c.size;
+    for (const auto &w : c.worked) fits = fits && tile_free_for(c, c.x + w.first, c.y + w.second);
+    if (!fits) {
+        update_city(c);
+        return;
+    }
+    compute_city_stats(c);
+}
+
 int Game::ai_cost_percent(int civ) const
 {
     if (civ < 0 || civ >= static_cast<int>(civs.size()) || !civs[civ].ai) return 100;
