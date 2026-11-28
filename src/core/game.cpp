@@ -1826,6 +1826,9 @@ MoveResult Game::move(int unit_id, int dx, int dy)
             u->x = tx;
             u->y = ty;
             u->moves = 0;
+            // Stepping ashore from a ship: the unit is no longer aboard.
+            u->carried_by = -1;
+            if (u->order == Order::Sentry) u->order = Order::None;
             capture_city(*c, u->owner);
             return MoveResult::Captured;
         }
@@ -1883,14 +1886,12 @@ MoveResult Game::move(int unit_id, int dx, int dy)
     // Ships take their cargo along.
     if (i.domain == Domain::Sea) {
         for (Unit &c : units) {
-            if (c.carried_by == u->id) {
+            if (c.carried_by == u->id && c.x == fx && c.y == fy) {
                 c.x = tx;
                 c.y = ty;
             }
         }
     }
-    (void)fx;
-    (void)fy;
     reveal(u->owner, tx, ty, (i.flags & kSight2) ? 2 : 1);
     if (map.at(tx, ty).hut && i.domain == Domain::Land) {
         enter_hut(unit_id);   // may add units: look the unit up again
