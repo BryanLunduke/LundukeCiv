@@ -150,7 +150,9 @@ void Game::ai_city(City &c)
         }
         if (is_military(u.type)) {
             ++own_military;
-            if (u.order != Order::Fortified && u.order != Order::Fortifying) ++own_attackers;
+            // Attackers: units stronger in attack than defence (the rest are
+            // garrison troops, as in DOS).
+            if (unit_info(u.type).domain == Domain::Land && unit_info(u.type).attack > unit_info(u.type).defense) ++own_attackers;
         }
     }
     auto pick = [&](bool unit_kind, int what) {
@@ -163,10 +165,12 @@ void Game::ai_city(City &c)
     // landmass, or enemy troops are close.
     bool front = false;     // the enemy is close to this city
     bool war_here = false;  // an enemy city we know of shares our landmass
+    bool raiders_here = false;  // a barbarian-held city within reach
     const int cont = map.at(c.x, c.y).continent;
     for (const City &o : cities) {
         if (!at_war(ci, o.owner) || map.at(o.x, o.y).continent != cont || !((map.at(o.x, o.y).explored >> ci) & 1u)) continue;
         war_here = true;
+        if (civs[o.owner].barbarian && map.distance(o.x, o.y, c.x, c.y) <= 12) raiders_here = true;
         if (map.distance(o.x, o.y, c.x, c.y) <= 8) front = true;
     }
     for (const Unit &e : units) {
@@ -190,9 +194,13 @@ void Game::ai_city(City &c)
         return;
     }
     // 3. War on this landmass: some attackers.
-    if (war_here && own_attackers < own_cities / 2 + 1 && rng.chance(0.5)) {
-        pick(true, best_unit(true));
-        return;
+    // A city held by barbarians close by is worth taking back.
+    if (war_here && own_attackers < own_cities / 2 + 1 + (raiders_here ? 2 : 0) && (raiders_here || rng.chance(0.5))) {
+        const int att = best_unit(true);
+        if (att >= 0 && unit_info(att).attack > unit_info(att).defense) {   // a real attacker, not more guards
+            pick(true, att);
+            return;
+        }
     }
     // 3b. Ships for passengers waiting in port, warships and aircraft in
     // wartime, one ship to look around once the homeland is full.
@@ -711,8 +719,13 @@ void Game::ai_unit(Unit &start)
         if (!u) return;
         if (u->order == Order::Fortified || u->order == Order::Fortifying) {
             const City *c = city_at(u->x, u->y);
-            // Stay unless the city has more guards than it needs.
-            if (!c || garrison_need(*c) >= 0 || info.attack <= info.defense) return;
+            if (!c) {
+                // Dug in out in the field to heal or to wait for help: an
+                // attacker takes up the march again once mostly healed.
+                if (info.attack <= info.defense || u->hp < kUnitHp * 3 / 4 || !rng.chance(0.25)) return;
+            } else if (garrison_need(*c) >= 0 || info.attack <= info.defense) {
+                return;   // stay unless the city has more guards than it needs
+            }
             u->order = Order::None;
         }
         if (const City *c = city_at(u->x, u->y)) {
@@ -1015,6 +1028,28 @@ void Game::ai_play(int ci)
         }
         if (!best || best_cost > c.gold - 80) break;
         buy(best->id);
+    }
+    // An army far larger than the cities need is disbanded a unit at a
+    // time, the weakest of an overfull garrison first, to save its upkeep.
+    {
+        int own = 0, mil = 0;
+        for (const City &ct : cities) own += ct.owner == ci;
+        for (const Unit &u : units) mil += u.owner == ci && is_military(u.type);
+        for (const City &ct : cities) {
+            if (mil <= 3 * own + 4) break;
+            if (ct.owner != ci) continue;
+            int weakest = -1, guards = 0;
+            for (const Unit &u : units) {
+                if (u.owner != ci || u.x != ct.x || u.y != ct.y || !is_military(u.type) || unit_info(u.type).domain != Domain::Land) continue;
+                ++guards;
+                if (unit_info(u.type).attack > unit_info(u.type).defense) continue;   // attackers resting here march again
+                if (weakest < 0 || unit_info(u.type).defense < unit_info(unit(weakest)->type).defense) weakest = u.id;
+            }
+            if (guards > (ct.size >= 7 ? 3 : 2) && weakest >= 0) {
+                disband(weakest);
+                --mil;
+            }
+        }
     }
     std::vector<int> ids;
     for (const Unit &u : units) {

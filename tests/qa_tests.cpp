@@ -406,3 +406,53 @@ TEST(ai_rates_pay_upkeep)
     CHECK(income >= upkeep);
     CHECK(c.sci > 0);   // but no higher than it needs
 }
+
+TEST(ai_army_upkeep)
+{
+    // A hoard far beyond what the cities need is cut back, defenders
+    // first; attackers are kept for the march.
+    Game g = flat_game();
+    const City &a = town(g, 0, 10, 10, 3, "Fort");
+    town(g, 0, 20, 10, 3, "Keep");
+    for (int i = 0; i < 16; ++i) place(g, 0, UnitType::Phalanx, a.x, a.y);
+    for (int i = 0; i < 2; ++i) place(g, 0, UnitType::Catapult, a.x, a.y);
+    auto count = [&](UnitType t) {
+        int n = 0;
+        for (const Unit &u : g.units) n += u.owner == 0 && u.type == t;
+        return n;
+    };
+    for (int t = 0; t < 4; ++t) {
+        for (Unit &u : g.units) u.moves = g.full_moves(u);
+        g.ai_play(0);
+    }
+    CHECK(count(UnitType::Phalanx) < 16);
+    CHECK_EQ(count(UnitType::Catapult), 2);
+}
+
+TEST(ai_retakes_barbarian_city)
+{
+    // A city the barbarians hold next door makes the neighbours build
+    // attackers, and an attacker dug in out in the field marches again.
+    Game g = flat_game();
+    const int bc = g.barbarian_civ();
+    CHECK(bc >= 0);
+    if (bc < 0) return;
+    town(g, bc, 16, 10, 3, "Held");
+    City &home = town(g, 0, 10, 10, 1, "Home");
+    for (int i = 0; i < 2; ++i) place(g, 0, UnitType::Phalanx, home.x, home.y);
+    g.civs[0].techs[static_cast<int>(Advance::BronzeWorking)] = true;
+    g.civs[0].techs[static_cast<int>(Advance::IronWorking)] = true;
+    g.ai_city(home);
+    CHECK(home.build_unit);
+    CHECK(unit_info(home.build).attack > unit_info(home.build).defense);
+    const int leg = place(g, 0, UnitType::Legion, 30, 30);
+    g.unit(leg)->order = Order::Fortified;
+    bool woke = false;
+    for (int t = 0; t < 30 && !woke; ++t) {
+        for (Unit &u : g.units) u.moves = g.full_moves(u);
+        g.ai_play(0);
+        const Unit *u = g.unit(leg);
+        woke = !u || u->order != Order::Fortified || u->x != 30 || u->y != 30;
+    }
+    CHECK(woke);
+}
