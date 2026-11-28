@@ -312,3 +312,40 @@ TEST(ai_save_roundtrip)
         CHECK_EQ(differ, 0);
     }
 }
+
+// ---------------------------------------------------------------- computer rulers
+
+TEST(ai_space_part_balance)
+{
+    // The frame grows with what it must hold: 13 structurals for 11
+    // components and 11 modules are not enough, 22 are; and parts other
+    // cities are building count, so a ship from nothing comes out viable.
+    Game g = flat_game();
+    const City &a = town(g, 0, 10, 10, 8, "Cape");
+    const int aid = a.id;
+    Civ &c = g.civs[0];
+    c.structurals = 13;
+    c.components = 11;
+    c.modules = 11;
+    CHECK_EQ(g.ai_space_part(0, aid), static_cast<int>(SpacePart::Structural));
+    c.structurals = 22;
+    CHECK_EQ(g.ai_space_part(0, aid), -1);
+    c.structurals = c.components = c.modules = 0;
+    for (int i = 0; i < 60; ++i) {
+        const int p = g.ai_space_part(0, aid);
+        if (p < 0) break;
+        if (p == static_cast<int>(SpacePart::Structural)) ++c.structurals;
+        else if (p == static_cast<int>(SpacePart::Component)) ++c.components;
+        else ++c.modules;
+    }
+    CHECK(g.space_stats(0).viable);
+    CHECK(c.structurals >= c.components + c.modules);
+    // A module under way in a second city counts towards the target.
+    c.structurals = 10;
+    c.components = 4;
+    c.modules = 2;
+    City &b = town(g, 0, 20, 10, 8, "Bay");
+    b.build_unit = false;
+    b.build = kSpaceBase + static_cast<int>(SpacePart::Module);
+    CHECK(g.ai_space_part(0, aid) != static_cast<int>(SpacePart::Module));
+}

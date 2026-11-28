@@ -75,6 +75,35 @@ void Game::choose_research_ai(int ci)
     c.research = opts[rng.below(static_cast<int>(opts.size()))];
 }
 
+int Game::ai_space_part(int ci, int city_id, bool frame_only) const
+{
+    // What the computer's spaceship needs next, counting parts finished and
+    // parts other cities are building: modules and components up to a
+    // modest target, and always as many structurals as they need.
+    const Civ &cv = civs[ci];
+    const int want_modules = difficulty >= Difficulty::King ? 6 : 3;
+    const int want_components = difficulty >= Difficulty::King ? 6 : 4;
+    int st = cv.structurals, co = cv.components, mo = cv.modules, building = 0;
+    for (const City &o : cities) {
+        if (o.owner != ci || o.id == city_id || o.build_unit || !is_space_build(o.build)) continue;
+        ++building;
+        const SpacePart p = static_cast<SpacePart>(o.build - kSpaceBase);
+        if (p == SpacePart::Structural) ++st;
+        else if (p == SpacePart::Component) ++co;
+        else ++mo;
+    }
+    int own = 0;
+    for (const City &o : cities) own += o.owner == ci;
+    if (building >= 1 + own / 4) return -1;
+    const int frame = std::max(co, want_components) + std::max(mo, want_modules);
+    if (st < co + mo + 1 && st < frame) return static_cast<int>(SpacePart::Structural);
+    if (frame_only) return st < frame ? static_cast<int>(SpacePart::Structural) : -1;
+    if (mo < want_modules) return static_cast<int>(SpacePart::Module);
+    if (co < want_components) return static_cast<int>(SpacePart::Component);
+    if (st < frame) return static_cast<int>(SpacePart::Structural);
+    return -1;
+}
+
 void Game::ai_city(City &c)
 {
     const int ci = c.owner;
@@ -233,31 +262,21 @@ void Game::ai_city(City &c)
         }
     }
     // The space race: once the Apollo Program stands, big productive cities
-    // build a modest, complete spaceship and the capital launches it.
+    // build a modest, complete spaceship and the capital launches it. Parts
+    // already under way elsewhere count, so the ship comes out balanced:
+    // frame enough to hold every component and module.
     if (space_open() && c.size >= 6 && st.shield_surplus >= 6 && !front && spare && civs[ci].launch_turn < 0) {
-        const Civ &cv = civs[ci];
-        const int want_modules = difficulty >= Difficulty::King ? 6 : 3;
-        const int want_components = difficulty >= Difficulty::King ? 6 : 4;
-        int on_parts = 0;
-        for (const City &o : cities) on_parts += o.owner == ci && o.id != c.id && !o.build_unit && is_space_build(o.build);
-        if (on_parts < 1 + own_cities / 4) {
-            int part = -1;
-            if (cv.structurals < cv.components + cv.modules + 1 && cv.structurals < want_modules + want_components)
-                part = static_cast<int>(SpacePart::Structural);
-            else if (cv.modules < want_modules)
-                part = static_cast<int>(SpacePart::Module);
-            else if (cv.components < want_components)
-                part = static_cast<int>(SpacePart::Component);
-            if (part >= 0 && can_build(c, false, kSpaceBase + part)) {
-                pick(false, kSpaceBase + part);
-                return;
-            }
-            // A part we can't make yet: a frame section is always welcome.
-            if (part >= 0 && cv.structurals < want_modules + want_components &&
-                can_build(c, false, kSpaceBase + static_cast<int>(SpacePart::Structural))) {
-                pick(false, kSpaceBase + static_cast<int>(SpacePart::Structural));
-                return;
-            }
+        const int part = ai_space_part(ci, c.id);
+        if (part >= 0 && can_build(c, false, kSpaceBase + part)) {
+            pick(false, kSpaceBase + part);
+            return;
+        }
+        // A part we can't make yet: a frame section, if more are wanted.
+        if (part >= 0 && part != static_cast<int>(SpacePart::Structural) &&
+            ai_space_part(ci, c.id, true) == static_cast<int>(SpacePart::Structural) &&
+            can_build(c, false, kSpaceBase + static_cast<int>(SpacePart::Structural))) {
+            pick(false, kSpaceBase + static_cast<int>(SpacePart::Structural));
+            return;
         }
     }
     // A productive city with the basics takes on a Wonder of the World now
