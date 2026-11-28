@@ -346,7 +346,7 @@ void App::show_events()
         d.other = static_cast<int>(e.kind);
         d.scroll = e.arg;
         d.city_id = e.city;
-        d.field = e.name;
+        d.field = e.kind == EventKind::Advance ? e.how : e.name;
         switch (e.kind) {
         case EventKind::Advance: d.title = "A New Advance"; break;
         case EventKind::Government: d.title = "A New Government"; break;
@@ -398,6 +398,7 @@ void App::end_turn()
     for (const Unit &u : g().units) {
         if (u.owner != human()) was[u.id] = {u.x, u.y};
     }
+    news_.clear();   // the bar shows this turn's news, not an old line
     g().end_turn();
     trails_.clear();
     if (options_.enemy_moves) {
@@ -412,6 +413,10 @@ void App::end_turn()
         }
     }
     refresh_terrain();
+    const bool reign_over = g().game_ended && !g().over() && g().end_turn_number == g().turn;
+    // The reign is over: no audiences are left to hold.
+    if (reign_over) g().talks.clear();
+    const size_t news_base = dialogs_.size();
     collect_news(true);
     begin_turn();
     open_talks();
@@ -423,7 +428,12 @@ void App::end_turn()
     // 2100 AD: the reign is over. The score and the Hall of Fame show once,
     // on top of the turn's news, on the turn the game ended; the ruler may
     // then play on.
-    if (g().game_ended && !g().over() && g().end_turn_number == g().turn) end_of_reign();
+    if (reign_over) {
+        // The turn's news first, then the score and the Hall of Fame.
+        const size_t reign_base = dialogs_.size();
+        end_of_reign();
+        std::rotate(dialogs_.begin() + static_cast<long>(news_base), dialogs_.begin() + static_cast<long>(reign_base), dialogs_.end());
+    }
 }
 
 void App::collect_news(bool report)
@@ -439,7 +449,12 @@ void App::collect_news(bool report)
         if (m.kind == MsgKind::Wonder && m.wonder >= 0) wonders.push_back({m.wonder, m.text});
         if (m.kind == MsgKind::Tech || m.kind == MsgKind::Good || m.kind == MsgKind::Bad) {
             popup.push_back(m.text);
-            if (popup_title.empty()) popup_title = m.kind == MsgKind::Tech ? "Science" : (m.kind == MsgKind::Bad ? "Bad News" : "Good News");
+            // A mixed turn (war, then a stolen advance) takes its title from
+            // the good news, not from the first line.
+            const char *t = m.kind == MsgKind::Tech ? "Science" : (m.kind == MsgKind::Bad ? "Bad News" : "Good News");
+            if (popup_title.empty() || (popup_title == "Bad News" && m.kind != MsgKind::Bad) ||
+                (popup_title == "Good News" && m.kind == MsgKind::Tech))
+                popup_title = t;
         }
     }
     seen_messages_ = g().messages.size();
@@ -447,7 +462,6 @@ void App::collect_news(bool report)
         Dialog d;
         d.kind = DialogKind::Report;
         d.title = "News of " + year_text(year_for_turn(g().turn));
-        if (lines.size() > 14) lines.erase(lines.begin(), lines.end() - 14);
         d.lines = lines;
         open(d);
     } else if (!report && !popup.empty()) {
@@ -485,6 +499,22 @@ void App::answer_talk(bool accept)
     for (const Dialog &d : dialogs_) more |= d.kind == DialogKind::Talk;
     if (!more) collect_news(false);
     refresh_terrain();
+}
+
+bool App::audience_ok(int civ, Proposal p)
+{
+    const int me = human();
+    const Treaty tr = g().treaty(me, civ);
+    // One round of proposals a year, as the leader says; ending a treaty is
+    // our own act and needs no audience.
+    const bool spoken = g().civs[me].last_talk[civ] == g().turn;
+    switch (p) {
+    case Proposal::Ceasefire: return !spoken && tr == Treaty::War;
+    case Proposal::Peace: return !spoken && (tr == Treaty::Ceasefire || tr == Treaty::None);
+    case Proposal::Embassy: return !spoken && !(((g().civs[me].embassy >> civ) & 1u) && ((g().civs[civ].embassy >> me) & 1u));
+    case Proposal::CancelTreaty: return tr == Treaty::Ceasefire || tr == Treaty::Peace;
+    }
+    return false;
 }
 
 void App::audience(int civ, Proposal p)
@@ -550,6 +580,7 @@ void App::unit_moved()
 
 void App::try_move(int dx, int dy)
 {
+    if (g().over()) active_ = -1;   // after the end the arrows only look around
     Unit *u = g().unit(active_);
     if (!u) {
         // No unit: the arrows scroll the map.
@@ -623,14 +654,37 @@ void App::try_move(int dx, int dy)
         d.title = "Nuclear Attack";
         d.tx = tx;
         d.ty = ty;
+        // Name the city (or cities) in the blast, and keep the map there
+        // so the next unit doesn't pull the view away.
+        std::string hit;
+        for (int j = -1; j <= 1; ++j) {
+            for (int i = -1; i <= 1; ++i) {
+                const City *c = g().city_at(g().map.wrap_x(tx + i), ty + j);
+                if (!c) continue;
+                hit += (hit.empty() ? "" : ", ") + c->name;
+                if (d.city_id < 0) d.city_id = c->id;
+            }
+        }
         for (size_t i = seen_messages_; i < g().messages.size(); ++i) {
             const Message &m = g().messages[i];
             if (m.civ == human() || m.civ == -1) d.lines.push_back(m.text);
         }
         seen_messages_ = g().messages.size();
+        bool sdi = false;
+        for (const std::string &l : d.lines) sdi |= l.find("SDI") != std::string::npos;
+        if (sdi) {
+            d.title = "Missile Destroyed";
+            if (!hit.empty()) d.field = "SDI Defense protected " + hit + ".";
+        } else if (!hit.empty()) {
+            d.title = "Nuclear Attack on " + hit;
+            d.field = "The blast struck " + hit + ".";
+        } else {
+            d.field = "The blast struck the countryside.";
+        }
         refresh_terrain();
         open(d);
         unit_moved();
+        center_on(tx, ty);
         return;
     }
     case MoveResult::Blocked:
@@ -644,7 +698,7 @@ void App::try_move(int dx, int dy)
 
 void App::do_order(char order)
 {
-    if (!game_) return;
+    if (!game_ || g().over()) return;
     Unit *u = g().unit(active_);
     if (!u) {
         return;
@@ -771,7 +825,8 @@ void App::do_order(char order)
 
 void App::click_map(int tx, int ty, int button)
 {
-    if (button == 3) {
+    if (button == 3 || g().over()) {
+        goto_mode_ = false;
         center_on(tx, ty);
         return;
     }
@@ -887,7 +942,12 @@ void App::load_slot(int slot)
 
 std::string App::slot_summary(int slot) const
 {
-    std::ifstream in(save_path(slot));
+    return save_summary(save_path(slot));
+}
+
+std::string App::save_summary(const std::string &path) const
+{
+    std::ifstream in(path);
     if (!in) return "Empty";
     std::string line;
     int turn = 0;
@@ -931,6 +991,7 @@ bool App::text_input(const std::string &utf8)
         return true;
     }
     if (d.kind == DialogKind::NewGame) {
+        if (settings.player_tribe >= 0) new_game_field_ = 2;
         std::string &f = new_game_field_ == 0 ? settings.player_name : (new_game_field_ == 1 ? settings.player_leader : seed_text_);
         if (new_game_field_ == 2) {
             for (char ch : utf8) {
@@ -960,7 +1021,39 @@ bool App::key(const KeyEvent &k)
     // Dialogs first.
     if (!dialogs_.empty()) {
         Dialog &d = dialogs_.back();
+        // The arrow keys (and Tab) move a focus ring through the dialog's
+        // buttons and rows; Enter or Space then chooses the one in focus.
+        // The first arrow press shows the ring on the default choice.
+        const bool own_arrows = d.kind == DialogKind::FindCity || d.kind == DialogKind::Databank ||
+                                ((d.kind == DialogKind::Message || d.kind == DialogKind::Report) && d.scroll_max > 0 &&
+                                 (k.key == Key::Up || k.key == Key::Down));
+        if (own_arrows && (d.kind == DialogKind::Message || d.kind == DialogKind::Report)) {
+            d.scroll = std::clamp(d.scroll + (k.key == Key::Up ? -1 : 1), 0, d.scroll_max);
+            return true;
+        }
+        const bool typing = d.kind == DialogKind::NewGame || d.kind == DialogKind::CityName || d.kind == DialogKind::FindCity;
+        const bool arrow = k.key == Key::Up || k.key == Key::Down || k.key == Key::Left || k.key == Key::Right ||
+                           (k.key == Key::Tab && d.kind != DialogKind::NewGame);
+        if (arrow && !own_arrows) {
+            if (!key_nav_) {
+                key_nav_ = true;
+                key_nav_depth_ = dialogs_.size();
+                key_nav_kind_ = d.kind;
+                focus_cx_ = focus_cy_ = -1;
+            } else {
+                pad_direction(k.key == Key::Left ? -1 : (k.key == Key::Right ? 1 : 0),
+                              k.key == Key::Up ? -1 : ((k.key == Key::Down || k.key == Key::Tab) ? 1 : 0));
+            }
+            return true;
+        }
+        if (key_nav_ && focus_hot_ >= 0 && focus_hot_ < static_cast<int>(hots_.size()) && !own_arrows && d.kind != DialogKind::CityName &&
+            (k.key == Key::Enter || (k.key == Key::Space && !typing))) {
+            pad_confirm();
+            return true;
+        }
         if (d.kind == DialogKind::NewGame) {
+            // A chosen people hides the name fields: only the seed is typed.
+            if (settings.player_tribe >= 0) new_game_field_ = 2;
             if (k.ctrl && (k.ch == 'l' || k.ch == 'o')) {
                 Dialog l;
                 l.kind = DialogKind::SaveLoad;
@@ -971,7 +1064,7 @@ bool App::key(const KeyEvent &k)
             } else if (k.key == Key::Backspace) {
                 pop_utf8(new_game_field_ == 0 ? settings.player_name : (new_game_field_ == 1 ? settings.player_leader : seed_text_));
             } else if (k.key == Key::Tab) {
-                new_game_field_ = (new_game_field_ + 1) % 3;
+                new_game_field_ = settings.player_tribe >= 0 ? 2 : (new_game_field_ + 1) % 3;
             } else if (k.key == Key::Enter) {
                 GameSettings s = settings;
                 s.seed = seed_text_.empty() ? 1 : std::strtoull(seed_text_.c_str(), nullptr, 10);
@@ -1051,7 +1144,10 @@ bool App::key(const KeyEvent &k)
         }
         if (d.kind == DialogKind::Talk) {
             const bool choice = !g().talks.empty() && talk_has_choice(g().talks.front());
-            if (k.key == Key::Enter || (k.key == Key::Char && k.ch == 'y') || (!choice && (k.key == Key::Escape || k.key == Key::Space)))
+            // A demand needs a deliberate Y or N: Enter alone must not pay
+            // up or hand over an advance.
+            const bool demand = choice && (g().talks.front().kind == TalkKind::Tribute || g().talks.front().kind == TalkKind::TechDemand);
+            if ((k.key == Key::Enter && !demand) || (k.key == Key::Char && k.ch == 'y') || (!choice && (k.key == Key::Escape || k.key == Key::Space)))
                 answer_talk(true);
             else if (choice && (k.key == Key::Escape || (k.key == Key::Char && k.ch == 'n')))
                 answer_talk(false);
@@ -1065,7 +1161,7 @@ bool App::key(const KeyEvent &k)
             return true;
         }
         if (d.kind == DialogKind::Audience && k.key == Key::Char && k.ch >= '1' && k.ch <= '4') {
-            audience(d.other, static_cast<Proposal>(k.ch - '1'));
+            if (audience_ok(d.other, static_cast<Proposal>(k.ch - '1'))) audience(d.other, static_cast<Proposal>(k.ch - '1'));
             return true;
         }
         if (d.kind == DialogKind::Databank) {
@@ -1136,6 +1232,7 @@ bool App::key(const KeyEvent &k)
     if (!game_) return false;
     if (k.ctrl) {
         if (k.ch == 's') {
+            if (g().over()) return true;   // nothing left to save
             Dialog d;
             d.kind = DialogKind::SaveLoad;
             d.title = "Save Game";
@@ -1155,6 +1252,17 @@ bool App::key(const KeyEvent &k)
             open(d);
         } else if (k.ch == 'q') {
             quit_ = true;
+        } else if (k.ch == 'h') {
+            Dialog d;
+            d.kind = DialogKind::HallOfFame;
+            d.title = "Hall of Fame";
+            d.scroll = -1;
+            open(d);
+        } else if (k.ch == 'r' && !g().over()) {
+            Dialog d;
+            d.kind = DialogKind::Retire;
+            d.title = "Retire";
+            open(d);
         }
         return true;
     }
@@ -1189,6 +1297,21 @@ bool App::key(const KeyEvent &k)
     }
     if (k.shift && k.ch == 'd') {
         do_order('d');
+        return true;
+    }
+    if (k.shift && (k.ch == 'r' || k.ch == 'o')) {
+        if (k.ch == 'r' && g().over()) return true;
+        Dialog d;
+        d.kind = k.ch == 'r' ? DialogKind::Revolution : DialogKind::Options;
+        d.title = k.ch == 'r' ? "Revolution" : "Game Options";
+        open(d);
+        return true;
+    }
+    if (k.ch == '#') {   // F3, as in DOS
+        Dialog d;
+        d.kind = DialogKind::Foreign;
+        d.title = "Foreign Affairs";
+        open(d);
         return true;
     }
     if (k.shift && k.ch == 'p') {
@@ -1287,6 +1410,7 @@ bool App::hover(double x, double y, double w, double h) const
 
 bool App::mouse_down(double x, double y, int button)
 {
+    key_nav_ = false;
     mouse_x_ = x;
     mouse_y_ = y;
     // Topmost first.
@@ -1314,6 +1438,7 @@ bool App::mouse_down(double x, double y, int button)
 
 bool App::mouse_move(double x, double y)
 {
+    if (std::fabs(x - mouse_x_) + std::fabs(y - mouse_y_) > 4) key_nav_ = false;
     mouse_x_ = x;
     mouse_y_ = y;
     return true;
@@ -1321,7 +1446,15 @@ bool App::mouse_move(double x, double y)
 
 bool App::wheel(double x, double y, double dy)
 {
-    if (!game_ || !dialogs_.empty()) return false;
+    if (!dialogs_.empty()) {
+        Dialog &d = dialogs_.back();
+        if ((d.kind == DialogKind::Message || d.kind == DialogKind::Report) && d.scroll_max > 0) {
+            d.scroll = std::clamp(d.scroll + (dy > 0 ? -1 : 1), 0, d.scroll_max);
+            return true;
+        }
+        return false;
+    }
+    if (!game_) return false;
     int tx, ty;
     if (!map_tile_at(x, y, tx, ty)) return false;
     const int old = zoom_;
@@ -1371,6 +1504,7 @@ std::vector<App::MenuItem> App::menu_items(int menu)
             d.kind = k;
             d.title = title;
             d.saving = saving;
+            if (k == DialogKind::HallOfFame) d.scroll = -1;   // browsing: no entry is new
             open(d);
         };
     };
@@ -1382,13 +1516,13 @@ std::vector<App::MenuItem> App::menu_items(int menu)
     case 0:
         items.push_back({"New Game", "Ctrl+N", [this] { open_new_game_dialog(); }});
         items.push_back({"Load Game...", "Ctrl+L", dialog(DialogKind::SaveLoad, "Load Game")});
-        items.push_back({"Save Game...", "Ctrl+S", dialog(DialogKind::SaveLoad, "Save Game", true), have});
-        items.push_back({"Tax Rates...", "T", dialog(DialogKind::Rates, "Tax Rates"), have});
-        items.push_back({"Revolution...", "", dialog(DialogKind::Revolution, "Revolution"), have});
+        items.push_back({"Save Game...", "Ctrl+S", dialog(DialogKind::SaveLoad, "Save Game", true), have && !g().over()});
+        items.push_back({"Tax Rates...", "T", dialog(DialogKind::Rates, "Tax Rates"), have && !g().over()});
+        items.push_back({"Revolution...", "Shift+R", dialog(DialogKind::Revolution, "Revolution"), have && !g().over()});
         items.push_back({"Find City...", "Ctrl+F", dialog(DialogKind::FindCity, "Find City"), have});
-        items.push_back({"Game Options...", "", dialog(DialogKind::Options, "Game Options")});
-        items.push_back({"Hall of Fame...", "", dialog(DialogKind::HallOfFame, "Hall of Fame")});
-        items.push_back({"Retire...", "", dialog(DialogKind::Retire, "Retire"), have && !g().over()});
+        items.push_back({"Game Options...", "Shift+O", dialog(DialogKind::Options, "Game Options")});
+        items.push_back({"Hall of Fame...", "Ctrl+H", dialog(DialogKind::HallOfFame, "Hall of Fame")});
+        items.push_back({"Retire...", "Ctrl+R", dialog(DialogKind::Retire, "Retire"), have && !g().over()});
         items.push_back({"Keys...", "F1", dialog(DialogKind::Help, "Keys")});
         items.push_back({"Quit", "Ctrl+Q", [this] { quit_ = true; }});
         break;
@@ -1416,7 +1550,7 @@ std::vector<App::MenuItem> App::menu_items(int menu)
     case 2:
         items.push_back({"Cities", "V", dialog(DialogKind::Cities, "Cities"), have});
         items.push_back({"Science", "A", dialog(DialogKind::Science, "Science Advisor"), have});
-        items.push_back({"Foreign Affairs", "", dialog(DialogKind::Foreign, "Foreign Affairs"), have});
+        items.push_back({"Foreign Affairs", "F3", dialog(DialogKind::Foreign, "Foreign Affairs"), have});
         items.push_back({"Wonders of the World", "O", dialog(DialogKind::Wonders, "Wonders of the World"), have});
         items.push_back({"Spaceship", "Y", dialog(DialogKind::Spaceship, "Spaceship"), have});
         items.push_back({"Civilization Score", "F9", dialog(DialogKind::Score, "Civilization Score"), have});
@@ -1462,7 +1596,44 @@ void App::render(cairo_t *cr, int w, int h)
         cairo_set_source_rgba(cr, 0, 0, 0, 0.45);
         cairo_rectangle(cr, 0, 0, w, h);
         cairo_fill(cr);
-        draw_dialog(cr, dialogs_.back());
+        // Customize World is a step of New Game: keep New Game in view.
+        if (dialogs_.size() >= 2 && dialogs_.back().kind == DialogKind::CustomWorld && dialogs_[dialogs_.size() - 2].kind == DialogKind::NewGame) {
+            draw_dialog(cr, dialogs_[dialogs_.size() - 2]);
+            hots_.clear();
+            cairo_set_source_rgba(cr, 0, 0, 0, 0.45);
+            cairo_rectangle(cr, 0, 0, w, h);
+            cairo_fill(cr);
+        }
+        // The city screen and its production list are laid out for about
+        // 1040x700; on a big window they are drawn half as large again.
+        const DialogKind top = dialogs_.back().kind;
+        const double ds = (top == DialogKind::City || top == DialogKind::Production) && w >= 1580 && h >= 1070 ? 1.5 : 1.0;
+        if (ds > 1) {
+            const int ww = geo_.win_w, wh = geo_.win_h;
+            const double mx = mouse_x_, my = mouse_y_;
+            geo_.win_w = static_cast<int>(w / ds);
+            geo_.win_h = static_cast<int>(h / ds);
+            mouse_x_ = mx / ds;
+            mouse_y_ = my / ds;
+            const size_t first = hots_.size();
+            cairo_save(cr);
+            cairo_scale(cr, ds, ds);
+            draw_dialog(cr, dialogs_.back());
+            cairo_restore(cr);
+            geo_.win_w = ww;
+            geo_.win_h = wh;
+            mouse_x_ = mx;
+            mouse_y_ = my;
+            for (size_t i = first; i < hots_.size(); ++i) {
+                Hot &hh = hots_[i];
+                hh.x *= ds;
+                hh.y *= ds;
+                hh.w *= ds;
+                hh.h *= ds;
+            }
+        } else {
+            draw_dialog(cr, dialogs_.back());
+        }
     } else if (menu_open_ >= 0) {
         draw_menu_dropdown(cr);
     }
@@ -1476,6 +1647,9 @@ void App::draw_title(cairo_t *cr)
     text_center(cr, "Sans Bold 30", "LUNDUKE CIV", geo_.win_w / 2.0, 44, kSlateGold);
     const int n = static_cast<int>(UnitType::Leader), per_row = 14;   // the 28 buildable units
     const double gap = (geo_.win_w - 40.0) / per_row;
+    // The counters only where the New Game dialog leaves room for them.
+    const double dialog_foot = std::max(92.0, (geo_.win_h - std::min(570.0, geo_.win_h - 100.0)) / 2 + 20) + std::min(570.0, geo_.win_h - 100.0);
+    if (geo_.win_h - 152 < dialog_foot + 8) return;
     for (int i = 0; i < n; ++i) {
         const Pixmap card = art::unit_card(static_cast<UnitType>(i), civ_colors(i % 8));
         const double x = 20 + (i % per_row) * gap + (gap - 64) / 2, y = geo_.win_h - 152 + (i / per_row) * 72;
