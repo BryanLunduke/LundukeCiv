@@ -192,6 +192,7 @@ struct GameEvent {
     int arg = -1;
     int city = -1;
     std::string name;   // the city's name (it may be gone by the time it shows)
+    std::string how;    // Advance: how it was learned (empty: the wise men found it)
 };
 
 struct CombatResult {
@@ -398,7 +399,7 @@ public:
     int research_ratio(int civ) const;
     int research_cost(int civ) const;
     static constexpr int kMinResearchCost = 10;   // no advance costs fewer bulbs
-    void learn(int civ, Advance a);
+    void learn(int civ, Advance a, const std::string &how = {});
     // The DOS game asks what to study only when an advance is found: once
     // bulbs are gathered toward one, the choice stands until it is found.
     // Surplus bulbs are lost when an advance is found (research starts
@@ -425,6 +426,7 @@ public:
     Yield tile_yield(int x, int y, int civ, bool centre, bool celebrating = false) const;
     bool tile_free_for(const City &c, int x, int y) const;
     void update_city(City &c);            // recompute stats (and arrange workers unless manual)
+    void restore_city(City &c);           // after loading: keep the saved workers if they still fit
     void arrange_workers(City &c);
     // Everyone not on a worked square is a specialist: keep the taxmen and
     // scientists that still fit (none below size 5), the rest entertain.
@@ -485,6 +487,7 @@ public:
     bool senate_blocks(int a, int b) const { return senate(a) && has_treaty(a, b); }
 
     // --- the Civilization Score, the end in 2100 AD and retirement
+    static constexpr int kBarbarianStartTurn = 50;   // no raiders, from the sea or from villages, before this
     static constexpr int kEndYear = 2100;          // DOS: 2100 less 20 a level; here 2100 on every level
     static constexpr int kRetireWarningYears = 20; // "plans retirement in 20 years"
     static constexpr int kWonderPoints = 20;
@@ -577,6 +580,8 @@ public:
     int barbarian_civ() const;                      // index, -1 none
     bool is_barbarian(int civ) const { return civ >= 0 && civ < static_cast<int>(civs.size()) && civs[civ].barbarian; }
     void spawn_barbarians(bool force_sea = false, bool force_land = false);
+    void ai_barbarians(int civ);             // the raiders' moves for a turn
+    bool barbarians_spare(int civ) const;    // DOS: one city and under 100 gold: left alone
     int ransom(int unit_id, int tx, int ty);        // capture lone barbarian leaders: gold won
     // --- villages: what roll (0..3) gives for a unit of `owner` at x, y
     HutOutcome hut_outcome(int owner, int x, int y, int roll) const;
@@ -597,6 +602,11 @@ public:
 
     // --- AI
     void ai_play(int civ);
+    int ai_space_part(int civ, int city_id, bool frame_only = false) const;   // the part to build next, -1 none
+    Government ai_government(int civ) const;   // the government the ruler wants
+    int ai_gold_margin(int civ) const;         // gold a turn to spare at the highest tax
+    void ai_rates(int civ);
+    void ai_city(City &c);
     // Computer rulers overseas (ai_navy.cpp): passengers waiting for a ship
     // (at x, y, or anywhere with x < 0), a free site on another landmass,
     // and the ship or aircraft a city should build (-1 none).
@@ -634,7 +644,6 @@ private:
     void choose_research_ai(int civ);
     void complete_wonder(City &c, Wonder w);
     void announce_wonder_start(const City &c);
-    void ai_city(City &c);
     void ai_unit(Unit &u);
     void ai_diplomacy(int civ);
     void meet(int ai, int other);          // one audience, if one is due
@@ -654,7 +663,6 @@ private:
     bool ai_landing(const Unit &ship, int tx, int ty, int &ox, int &oy) const;
     const City *ai_overseas_enemy(int ci, int fx, int fy) const;
     bool ai_has_ferry(int ci) const;
-    void ai_barbarians(int civ);
     bool barbarian_landing(int bc, UnitType ship, const std::vector<UnitType> &army);
     bool barbarian_uprising(int bc, const std::vector<UnitType> &army);
     void space_arrivals();

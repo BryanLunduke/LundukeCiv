@@ -45,6 +45,10 @@ ui::KeyEvent translate(const SDL_KeyboardEvent &e)
         k.key = ui::Key::Char;
         k.ch = '?';
         break;
+    case SDLK_F3:   // Foreign Affairs
+        k.key = ui::Key::Char;
+        k.ch = '#';
+        break;
     case SDLK_F9:   // the Civilization Score, as in DOS
         k.key = ui::Key::Char;
         k.ch = '%';

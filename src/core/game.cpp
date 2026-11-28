@@ -373,7 +373,7 @@ void Game::complete_wonder(City &c, Wonder w)
             }
             if (civ.research == Advance::None) break;
             const Advance a = civ.research;
-            learn(c.owner, a);
+            learn(c.owner, a, "Darwin's Voyage has revealed the secret of");
             say(c.owner, MsgKind::Tech, std::string("Darwin's Voyage: your scientists discover ") + advance_info(a).name + "!");
             if (civ.ai) choose_research_ai(c.owner);
         }
@@ -497,13 +497,14 @@ void Game::update_tech_catchup()
     tech_catchup = year_for_turn(turn) < 0 ? 0 : std::clamp(most - (turn - 1) / 9, 0, 6);
 }
 
-void Game::learn(int civ, Advance a)
+void Game::learn(int civ, Advance a, const std::string &how)
 {
     if (civ == human && !civs[civ].ai && a != Advance::None) {
         GameEvent e;
         e.kind = EventKind::Advance;
         e.civ = civ;
         e.arg = static_cast<int>(a);
+        e.how = how;
         events.push_back(e);
     }
     if (a == Advance::FutureTech) {
@@ -912,6 +913,20 @@ void Game::update_city(City &c)
     ai_specialists(c);
 }
 
+void Game::restore_city(City &c)
+{
+    // A saved city keeps its workers and specialists as they were, so a
+    // game loads exactly as it was saved; only an arrangement that no
+    // longer fits is worked out afresh.
+    bool fits = static_cast<int>(c.worked.size()) + c.specialists() == c.size;
+    for (const auto &w : c.worked) fits = fits && tile_free_for(c, c.x + w.first, c.y + w.second);
+    if (!fits) {
+        update_city(c);
+        return;
+    }
+    compute_city_stats(c);
+}
+
 int Game::ai_cost_percent(int civ) const
 {
     if (civ < 0 || civ >= static_cast<int>(civs.size()) || !civs[civ].ai) return 100;
@@ -1209,7 +1224,7 @@ void Game::spawn_barbarians(bool force_sea, bool force_land)
     if (bc < 0) return;
     const bool forced = force_sea || force_land;
     if (!forced) {
-        if (turn < 50) return;
+        if (turn < kBarbarianStartTurn) return;
         const double p = 0.015 + 0.005 * static_cast<int>(difficulty);
         if (!rng.chance(p)) return;
     }
@@ -1223,6 +1238,16 @@ void Game::spawn_barbarians(bool force_sea, bool force_land)
     const bool sea = force_sea || (!force_land && rng.chance(0.5));
     if (sea && barbarian_landing(bc, ship, army)) return;
     if (!force_sea) barbarian_uprising(bc, army);
+}
+
+bool Game::barbarians_spare(int civ) const
+{
+    // DOS: barbarians do not go after a people with fewer than two cities
+    // and under 100 gold.
+    if (civ < 0 || civ >= static_cast<int>(civs.size()) || civs[civ].barbarian) return false;
+    int own = 0;
+    for (const City &c : cities) own += c.owner == civ;
+    return own < 2 && civs[civ].gold < 100;
 }
 
 void Game::ai_barbarians(int bc)
@@ -1276,12 +1301,25 @@ void Game::ai_barbarians(int bc)
                 continue;
             }
         }
-        // March on the nearest city of anyone else on this landmass.
+        // DOS (MoveBarbarianUnit): every fourth turn a band that has no
+        // city within eight squares on its landmass breaks up.
         const int cont = map.at(u->x, u->y).continent;
+        if (((u->id + turn) & 3) == 0 && !city_at(u->x, u->y)) {
+            int closest = 1 << 30;
+            for (const City &c : cities) {
+                if (map.at(c.x, c.y).continent == cont) closest = std::min(closest, map.distance(u->x, u->y, c.x, c.y));
+            }
+            if (closest > 8) {
+                kill_unit(id);
+                continue;
+            }
+        }
+        // March on the nearest city of anyone else on this landmass -- but,
+        // as in DOS, leave a people with one city and under 100 gold alone.
         const City *target = nullptr;
         int best = 17;
         for (const City &c : cities) {
-            if (c.owner == bc || map.at(c.x, c.y).continent != cont) continue;
+            if (c.owner == bc || map.at(c.x, c.y).continent != cont || barbarians_spare(c.owner)) continue;
             const int d = map.distance(u->x, u->y, c.x, c.y);
             if (d < best) {
                 best = d;
@@ -1302,7 +1340,7 @@ void Game::ai_barbarians(int bc)
                     const int x = map.wrap_x(u->x + i), y = u->y + j;
                     if (!map.land(x, y)) continue;
                     const int o = owner_at(x, y);
-                    if (o < 0 || o == bc) continue;
+                    if (o < 0 || o == bc || (city_at(x, y) && barbarians_spare(o))) continue;
                     double p = 1.0;
                     for (int did : units_at(x, y)) {
                         const Unit *d = unit(did);
@@ -1439,7 +1477,7 @@ std::string Game::diplomat_act(int unit_id, int tx, int ty, DiploAction a)
             if (civs[them].techs[t] && !civs[me].techs[t]) opts.push_back(t);
         }
         const int t = opts[rng.below(static_cast<int>(opts.size()))];
-        learn(me, static_cast<Advance>(t));
+        learn(me, static_cast<Advance>(t), "Your Diplomat has stolen the secret of");
         c->stolen |= static_cast<std::uint8_t>(1u << me);
         out = std::string("Your Diplomat steals the secret of ") + advance_info(t).name + " from " + c->name + "!";
         say(them, MsgKind::Bad, "The " + civs[me].name + " steal " + advance_info(t).name + " from " + c->name + ".", c->x, c->y);
@@ -1826,6 +1864,9 @@ MoveResult Game::move(int unit_id, int dx, int dy)
             u->x = tx;
             u->y = ty;
             u->moves = 0;
+            // Stepping ashore from a ship: the unit is no longer aboard.
+            u->carried_by = -1;
+            if (u->order == Order::Sentry) u->order = Order::None;
             capture_city(*c, u->owner);
             return MoveResult::Captured;
         }
@@ -1883,14 +1924,12 @@ MoveResult Game::move(int unit_id, int dx, int dy)
     // Ships take their cargo along.
     if (i.domain == Domain::Sea) {
         for (Unit &c : units) {
-            if (c.carried_by == u->id) {
+            if (c.carried_by == u->id && c.x == fx && c.y == fy) {
                 c.x = tx;
                 c.y = ty;
             }
         }
     }
-    (void)fx;
-    (void)fy;
     reveal(u->owner, tx, ty, (i.flags & kSight2) ? 2 : 1);
     if (map.at(tx, ty).hut && i.domain == Domain::Land) {
         enter_hut(unit_id);   // may add units: look the unit up again
@@ -2168,9 +2207,10 @@ void Game::natural_disasters()
 //   1: before 1000 AD, an advance (never Future Tech); after, 50 gold.
 //   2: 50 gold.
 //   3: within three squares, or with no city of our own: mercenaries;
-//      otherwise a horde of barbarians.
+//      otherwise a horde of barbarians. Gentler than DOS: also
+//      mercenaries before turn 50 and while we have one city.
 // Mercenaries are a Legion or Cavalry; the horde is Cavalry on open
-// ground and Legions in rough, one to eight of them by how few cities we
+// ground and Legions in rough, four or eight of them by how few cities we
 // have. Aircraft fly over; the raiders find nothing.
 HutOutcome Game::hut_outcome(int owner, int x, int y, int roll) const
 {
@@ -2184,7 +2224,11 @@ HutOutcome Game::hut_outcome(int owner, int x, int y, int roll) const
         return HutOutcome::Mercenaries;
     case 1: return (turn <= 1 || year_for_turn(turn) > 1000) ? HutOutcome::Gold : HutOutcome::Advance;
     case 2: return HutOutcome::Gold;
-    default: return (nearest < 4 || own == 0) ? HutOutcome::Mercenaries : HutOutcome::Barbarians;
+    default:
+        // DOS: within three squares of a city, or with no city of our own,
+        // mercenaries. Here also before barbarians appear at all (turn 50)
+        // and while we have a single city, so a village cannot end a people.
+        return (nearest < 4 || own < 2 || turn < kBarbarianStartTurn) ? HutOutcome::Mercenaries : HutOutcome::Barbarians;
     }
 }
 
@@ -2204,7 +2248,7 @@ void Game::enter_hut(int unit_id)
         } else {
             const Advance a = opts[rng.below(static_cast<int>(opts.size()))];
             say(owner, MsgKind::Tech, std::string("You have discovered scrolls of ancient wisdom: the secret of ") + advance_info(a).name + ".", x, y);
-            learn(owner, a);
+            learn(owner, a, "You have discovered scrolls of ancient wisdom: the secret of");
             if (civs[owner].ai && civs[owner].research == Advance::None) choose_research_ai(owner);
             return;
         }
@@ -2298,7 +2342,7 @@ void Game::capture_city(City &c, int new_owner)
     if (!civs[new_owner].barbarian && !civs[old].barbarian) {
         const Advance a = capture_tech(new_owner, old);
         if (a != Advance::None) {
-            learn(new_owner, a);
+            learn(new_owner, a, "In " + c.name + " your scholars find the secret of");
             say(new_owner, MsgKind::Tech, std::string("In ") + c.name + " your scholars find the secret of " + advance_info(a).name + ".", c.x, c.y);
         }
     }
@@ -3220,7 +3264,7 @@ void Game::start_turn_for(int ci)
                 if (k != ci && civs[k].alive && !civs[k].barbarian && civs[k].techs[a]) ++knowers;
             }
             if (knowers >= 2) {
-                learn(ci, static_cast<Advance>(a));
+                learn(ci, static_cast<Advance>(a), "The Great Library has given you the secret of");
                 say(ci, MsgKind::Tech, std::string("The Great Library gives you ") + advance_info(a).name + ".");
                 break;
             }

@@ -410,8 +410,11 @@ double App::draw_pad_hints(cairo_t *cr, double right, double y, const std::vecto
 // The tile cursor, the menu highlight and the dialog focus ring.
 void App::draw_pad_overlay(cairo_t *cr)
 {
-    if (!pad_hints() || !game_) return;
-    if (dialogs_.empty() && menu_open_ < 0) {
+    // The keyboard focus belongs to one dialog; a new one starts without.
+    if (key_nav_ && (dialogs_.size() != key_nav_depth_ || dialogs_.back().kind != key_nav_kind_)) key_nav_ = false;
+    const bool pad = pad_hints() && game_;
+    if (!pad && !(key_nav_ && !dialogs_.empty())) return;
+    if (pad && dialogs_.empty() && menu_open_ < 0) {
         if (cursor_x_ < 0 || cursor_unit_ != active_) snap_cursor();
         const int t = tile_px();
         const int cols = geo_.map_w / t + 1;
@@ -441,6 +444,7 @@ void App::draw_pad_overlay(cairo_t *cr)
             set(cr, kSlateGold);
             cairo_stroke(cr);
         }
+        if (!pad) return;
         // Dialog hints along the bottom, over the dimmed status bar.
         const double y = geo_.win_h - geo_.status_h;
         fill(cr, 0, y, geo_.win_w, geo_.status_h, kSlateDeep);

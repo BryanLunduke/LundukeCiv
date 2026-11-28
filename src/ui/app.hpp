@@ -83,6 +83,7 @@ struct Dialog {
     std::string field;    // CityName text
     bool view_only = false;   // City: a foreign city a Diplomat investigates
     int tx = 0, ty = 0;       // DiplomatMenu: the square the Diplomat faces
+    int scroll_max = 0;       // Message, Report: lines that can scroll (set when drawn)
 };
 
 struct Hot {
@@ -170,6 +171,9 @@ private:
     pad::Glyphs glyphs_;
     bool deck_ = false;
     bool pad_nav_ = false;
+    bool key_nav_ = false;   // arrow keys move a focus ring through a dialog
+    size_t key_nav_depth_ = 0;   // ...the dialog it was started in
+    DialogKind key_nav_kind_ = DialogKind::Message;
     int cursor_x_ = -1, cursor_y_ = -1;
     int cursor_unit_ = -1;          // the unit the cursor last snapped to
     pad::Repeat repeat_;
@@ -225,6 +229,7 @@ private:
     void save_slot(int slot);
     void load_slot(int slot);
     std::string slot_summary(int slot) const;
+    std::string save_summary(const std::string &path) const;   // "Empty", or the people, year and turn
     void hot(double x, double y, double w, double h, std::function<void()> fn);
     bool hover(double x, double y, double w, double h) const;
     int research_turns(int civ) const;
@@ -278,6 +283,7 @@ private:
     void find_city_go(int city_id);
     void open_talks();                       // one dialog for each audience waiting
     void answer_talk(bool accept);
+    bool audience_ok(int civ, civ::Proposal p);   // the option is open this year
     void audience(int civ, civ::Proposal p);
     void open_databank(int topic, const std::string &select = std::string());
 

@@ -75,6 +75,35 @@ void Game::choose_research_ai(int ci)
     c.research = opts[rng.below(static_cast<int>(opts.size()))];
 }
 
+int Game::ai_space_part(int ci, int city_id, bool frame_only) const
+{
+    // What the computer's spaceship needs next, counting parts finished and
+    // parts other cities are building: modules and components up to a
+    // modest target, and always as many structurals as they need.
+    const Civ &cv = civs[ci];
+    const int want_modules = difficulty >= Difficulty::King ? 6 : 3;
+    const int want_components = difficulty >= Difficulty::King ? 6 : 4;
+    int st = cv.structurals, co = cv.components, mo = cv.modules, building = 0;
+    for (const City &o : cities) {
+        if (o.owner != ci || o.id == city_id || o.build_unit || !is_space_build(o.build)) continue;
+        ++building;
+        const SpacePart p = static_cast<SpacePart>(o.build - kSpaceBase);
+        if (p == SpacePart::Structural) ++st;
+        else if (p == SpacePart::Component) ++co;
+        else ++mo;
+    }
+    int own = 0;
+    for (const City &o : cities) own += o.owner == ci;
+    if (building >= 1 + own / 4) return -1;
+    const int frame = std::max(co, want_components) + std::max(mo, want_modules);
+    if (st < co + mo + 1 && st < frame) return static_cast<int>(SpacePart::Structural);
+    if (frame_only) return st < frame ? static_cast<int>(SpacePart::Structural) : -1;
+    if (mo < want_modules) return static_cast<int>(SpacePart::Module);
+    if (co < want_components) return static_cast<int>(SpacePart::Component);
+    if (st < frame) return static_cast<int>(SpacePart::Structural);
+    return -1;
+}
+
 void Game::ai_city(City &c)
 {
     const int ci = c.owner;
@@ -121,7 +150,9 @@ void Game::ai_city(City &c)
         }
         if (is_military(u.type)) {
             ++own_military;
-            if (u.order != Order::Fortified && u.order != Order::Fortifying) ++own_attackers;
+            // Attackers: units stronger in attack than defence (the rest are
+            // garrison troops, as in DOS).
+            if (unit_info(u.type).domain == Domain::Land && unit_info(u.type).attack > unit_info(u.type).defense) ++own_attackers;
         }
     }
     auto pick = [&](bool unit_kind, int what) {
@@ -134,10 +165,12 @@ void Game::ai_city(City &c)
     // landmass, or enemy troops are close.
     bool front = false;     // the enemy is close to this city
     bool war_here = false;  // an enemy city we know of shares our landmass
+    bool raiders_here = false;  // a barbarian-held city within reach
     const int cont = map.at(c.x, c.y).continent;
     for (const City &o : cities) {
         if (!at_war(ci, o.owner) || map.at(o.x, o.y).continent != cont || !((map.at(o.x, o.y).explored >> ci) & 1u)) continue;
         war_here = true;
+        if (civs[o.owner].barbarian && map.distance(o.x, o.y, c.x, c.y) <= 12) raiders_here = true;
         if (map.distance(o.x, o.y, c.x, c.y) <= 8) front = true;
     }
     for (const Unit &e : units) {
@@ -161,9 +194,13 @@ void Game::ai_city(City &c)
         return;
     }
     // 3. War on this landmass: some attackers.
-    if (war_here && own_attackers < own_cities / 2 + 1 && rng.chance(0.5)) {
-        pick(true, best_unit(true));
-        return;
+    // A city held by barbarians close by is worth taking back.
+    if (war_here && own_attackers < own_cities / 2 + 1 + (raiders_here ? 2 : 0) && (raiders_here || rng.chance(0.5))) {
+        const int att = best_unit(true);
+        if (att >= 0 && unit_info(att).attack > unit_info(att).defense) {   // a real attacker, not more guards
+            pick(true, att);
+            return;
+        }
     }
     // 3b. Ships for passengers waiting in port, warships and aircraft in
     // wartime, one ship to look around once the homeland is full.
@@ -233,31 +270,21 @@ void Game::ai_city(City &c)
         }
     }
     // The space race: once the Apollo Program stands, big productive cities
-    // build a modest, complete spaceship and the capital launches it.
+    // build a modest, complete spaceship and the capital launches it. Parts
+    // already under way elsewhere count, so the ship comes out balanced:
+    // frame enough to hold every component and module.
     if (space_open() && c.size >= 6 && st.shield_surplus >= 6 && !front && spare && civs[ci].launch_turn < 0) {
-        const Civ &cv = civs[ci];
-        const int want_modules = difficulty >= Difficulty::King ? 6 : 3;
-        const int want_components = difficulty >= Difficulty::King ? 6 : 4;
-        int on_parts = 0;
-        for (const City &o : cities) on_parts += o.owner == ci && o.id != c.id && !o.build_unit && is_space_build(o.build);
-        if (on_parts < 1 + own_cities / 4) {
-            int part = -1;
-            if (cv.structurals < cv.components + cv.modules + 1 && cv.structurals < want_modules + want_components)
-                part = static_cast<int>(SpacePart::Structural);
-            else if (cv.modules < want_modules)
-                part = static_cast<int>(SpacePart::Module);
-            else if (cv.components < want_components)
-                part = static_cast<int>(SpacePart::Component);
-            if (part >= 0 && can_build(c, false, kSpaceBase + part)) {
-                pick(false, kSpaceBase + part);
-                return;
-            }
-            // A part we can't make yet: a frame section is always welcome.
-            if (part >= 0 && cv.structurals < want_modules + want_components &&
-                can_build(c, false, kSpaceBase + static_cast<int>(SpacePart::Structural))) {
-                pick(false, kSpaceBase + static_cast<int>(SpacePart::Structural));
-                return;
-            }
+        const int part = ai_space_part(ci, c.id);
+        if (part >= 0 && can_build(c, false, kSpaceBase + part)) {
+            pick(false, kSpaceBase + part);
+            return;
+        }
+        // A part we can't make yet: a frame section, if more are wanted.
+        if (part >= 0 && part != static_cast<int>(SpacePart::Structural) &&
+            ai_space_part(ci, c.id, true) == static_cast<int>(SpacePart::Structural) &&
+            can_build(c, false, kSpaceBase + static_cast<int>(SpacePart::Structural))) {
+            pick(false, kSpaceBase + static_cast<int>(SpacePart::Structural));
+            return;
         }
     }
     // A productive city with the basics takes on a Wonder of the World now
@@ -282,8 +309,16 @@ void Game::ai_city(City &c)
             }
         }
     }
+    // A building is only worth its upkeep if the treasury can carry it;
+    // a Marketplace pays its own way in a city with trade.
+    const int margin = ai_gold_margin(ci);
+    auto affordable = [&](Building b) {
+        const int up = building_upkeep(ci, static_cast<int>(b));
+        if (up <= 0 || up <= margin) return true;
+        return (b == Building::Marketplace || b == Building::Bank) && st.raw.trade >= 6;
+    };
     for (const Want &w : wants) {
-        if (!w.ok || !can_build(c, false, static_cast<int>(w.b))) continue;
+        if (!w.ok || !can_build(c, false, static_cast<int>(w.b)) || !affordable(w.b)) continue;
         pick(false, static_cast<int>(w.b));
         return;
     }
@@ -298,7 +333,7 @@ void Game::ai_city(City &c)
         const Building bb = static_cast<Building>(b);
         if (bb == Building::Palace || bb == Building::SdiDefense || bb == Building::Barracks) continue;
         if (bb == Building::CityWalls && !front) continue;
-        if (can_build(c, false, b) && building_info(b).upkeep <= (c.size >= 4 ? 2 : 1)) {
+        if (can_build(c, false, b) && building_info(b).upkeep <= (c.size >= 4 ? 2 : 1) && affordable(bb)) {
             pick(false, b);
             return;
         }
@@ -312,7 +347,27 @@ void Game::ai_city(City &c)
         pick(true, static_cast<int>(UnitType::Settlers));
         return;
     }
-    pick(true, best_unit(false));
+    // Rather than an ever larger standing army: Caravans, which help build
+    // wonders or open trade routes, or a wonder of our own.
+    int caravans = 0;
+    for (const Unit &u : units) caravans += u.owner == ci && u.type == UnitType::Caravan;
+    if (can_build(c, true, static_cast<int>(UnitType::Caravan)) && caravans < 2 + own_cities / 3) {
+        pick(true, static_cast<int>(UnitType::Caravan));
+        return;
+    }
+    for (int w = 0; w < kWonderCount; ++w) {
+        if (can_build(c, false, kWonderBase + w)) {
+            pick(false, kWonderBase + w);
+            return;
+        }
+    }
+    if (own_military < 2 * own_cities + 2) {
+        pick(true, best_unit(war_here && rng.chance(0.5)));
+        return;
+    }
+    // Truly nothing: a worker to improve the land, or a defender in a
+    // city too small to spare the people.
+    pick(true, c.size >= 3 ? static_cast<int>(UnitType::Settlers) : best_unit(false));
 }
 
 // ai_diplomacy: see diplomacy.cpp.
@@ -664,8 +719,13 @@ void Game::ai_unit(Unit &start)
         if (!u) return;
         if (u->order == Order::Fortified || u->order == Order::Fortifying) {
             const City *c = city_at(u->x, u->y);
-            // Stay unless the city has more guards than it needs.
-            if (!c || garrison_need(*c) >= 0 || info.attack <= info.defense) return;
+            if (!c) {
+                // Dug in out in the field to heal or to wait for help: an
+                // attacker takes up the march again once mostly healed.
+                if (info.attack <= info.defense || u->hp < kUnitHp * 3 / 4 || !rng.chance(0.25)) return;
+            } else if (garrison_need(*c) >= 0 || info.attack <= info.defense) {
+                return;   // stay unless the city has more guards than it needs
+            }
             u->order = Order::None;
         }
         if (const City *c = city_at(u->x, u->y)) {
@@ -825,6 +885,90 @@ void Game::ai_unit(Unit &start)
     }
 }
 
+Government Game::ai_government(int ci) const
+{
+    // DOS (AIEngine, CityWorker): the Republic when the trade it brings
+    // outweighs the discontent of troops in the field -- each weighs less
+    // for a civilized people and where a Marketplace calms the city -- and
+    // not while at war with a people that is ahead in science; Communism for
+    // a big empire; otherwise Monarchy.
+    const Civ &c = civs[ci];
+    const int ideology = c.tribe >= 0 ? tribe_info(c.tribe).ideology : 0;
+    int own = 0, score = 0;
+    for (const City &ct : cities) {
+        if (ct.owner != ci) continue;
+        ++own;
+        for (const auto &w : ct.worked) score += tile_yield(ct.x + w.first, ct.y + w.second, ci, false).trade > 0;
+    }
+    for (const Unit &u : units) {
+        if (u.owner != ci || !is_military(u.type) || unit_info(u.type).attack == 0) continue;
+        const City *in = city_at(u.x, u.y);
+        if (in && in->owner == ci) continue;
+        const City *home = city(u.home);
+        score -= (home && home->has(Building::Marketplace) ? 4 : 6) - 2 * ideology;
+    }
+    for (int o = 0; o < static_cast<int>(civs.size()); ++o) {
+        if (o != ci && civs[o].alive && !civs[o].barbarian && at_war(ci, o) && techs_known(o) > techs_known(ci)) score = -999;
+    }
+    // Once a Republic, it takes clear trouble to give it up.
+    if (c.govt == Government::Republic) score += 8 + own;
+    if (has(ci, Advance::Republic) && score >= 0) return Government::Republic;
+    if (has(ci, Advance::Communism) && own > 10) return Government::Communism;
+    if (has(ci, Advance::Monarchy)) return Government::Monarchy;
+    return Government::Despotism;
+}
+
+int Game::ai_gold_margin(int ci) const
+{
+    // Gold a turn left over with taxes as high as the government allows,
+    // after paying for buildings (an estimate from the cities' current tax).
+    const Civ &c = civs[ci];
+    const int mx = government_info(c.govt).max_rate;
+    int income = 0, upkeep = 0;
+    for (const City &ct : cities) {
+        if (ct.owner != ci) continue;
+        income += ct.stats.tax;
+        for (int b = 0; b < kBuildingCount; ++b) {
+            if (ct.has(static_cast<Building>(b))) upkeep += building_upkeep(ci, b);
+        }
+        if (!ct.build_unit && ct.build >= 0 && ct.build < kBuildingCount) upkeep += building_upkeep(ci, ct.build);
+    }
+    if (c.tax > 0) income = income * mx / c.tax;
+    return income - upkeep;
+}
+
+void Game::ai_rates(int ci)
+{
+    // As much science as the treasury allows: the lowest tax that pays for
+    // the buildings (and puts something by while the treasury is thin).
+    Civ &c = civs[ci];
+    const int mx = government_info(c.govt).max_rate;
+    int lux = 0, idle = 0, citizens = 0, own = 0, upkeep = 0;
+    for (const City &ct : cities) {
+        if (ct.owner != ci) continue;
+        ++own;
+        idle += ct.entertainers;
+        citizens += ct.size;
+        for (int b = 0; b < kBuildingCount; ++b) {
+            if (ct.has(static_cast<Building>(b))) upkeep += building_upkeep(ci, b);
+        }
+    }
+    // Some luxuries when cities have to keep many entertainers.
+    if (citizens > 0 && idle * 6 > citizens) lux = std::min(3, mx);
+    const int reserve = 40 + 5 * own;
+    const int need = upkeep + (c.gold < reserve ? std::max(2, own / 2) : 0);
+    const int lowest = std::max(0, 10 - mx - lux);
+    for (int tax = lowest; tax <= mx; ++tax) {
+        const int sci = 10 - tax - lux;
+        if (sci < 0) break;
+        if (sci > mx) continue;
+        if (c.tax != tax || c.lux != lux || c.sci != sci) set_rates(ci, tax, lux, sci);
+        int income = 0;
+        for (const City &ct : cities) income += ct.owner == ci ? ct.stats.tax : 0;
+        if (income >= need) return;
+    }
+}
+
 void Game::ai_play(int ci)
 {
     Civ &c = civs[ci];
@@ -837,35 +981,13 @@ void Game::ai_play(int ci)
         for (const Civ &o : civs) rival |= &o != &c && o.launch_turn >= 0;
         if ((ss.success_pct >= 100 && ss.pairs >= 2) || rival) launch(ci);
     }
-    if (c.govt == Government::Despotism && has(ci, Advance::Monarchy)) revolution(ci, Government::Monarchy);
+    // DOS (AIEngine): every eighth turn the ruler weighs its government; a
+    // Despot moves to Monarchy as soon as it can.
     if (c.govt != Government::Anarchy) {
-        const int mx = government_info(c.govt).max_rate;
-        int sci = mx, tax = 10 - mx, lux = 0;
-        if (c.gold < 30) {
-            sci = std::max(10 - mx, 4);
-            tax = 10 - sci;
-        }
-        if (tax > mx) {
-            tax = mx;
-            lux = 10 - sci - tax;
-        }
-        // Some luxuries when cities have to keep entertainers.
-        int idle = 0, citizens = 0;
-        for (const City &ct : cities) {
-            if (ct.owner != ci) continue;
-            idle += ct.entertainers;
-            citizens += ct.size;
-        }
-        if (citizens > 0 && idle * 6 > citizens && lux == 0) {
-            lux = std::min(3, mx);
-            if (sci >= lux) {
-                sci -= lux;
-            } else {
-                tax -= lux;
-            }
-        }
-        if (c.sci != sci || c.tax != tax || c.lux != lux) set_rates(ci, tax, lux, sci);
+        const Government want = ai_government(ci);
+        if (want != c.govt && (((ci + turn) & 7) == 0 || c.govt == Government::Despotism)) revolution(ci, want);
     }
+    if (c.govt != Government::Anarchy) ai_rates(ci);
     for (City &ct : cities) {
         if (ct.owner == ci && (!can_build(ct, ct.build_unit, ct.build) || ct.founded == turn || ct.shields == 0)) ai_city(ct);
     }
@@ -906,6 +1028,28 @@ void Game::ai_play(int ci)
         }
         if (!best || best_cost > c.gold - 80) break;
         buy(best->id);
+    }
+    // An army far larger than the cities need is disbanded a unit at a
+    // time, the weakest of an overfull garrison first, to save its upkeep.
+    {
+        int own = 0, mil = 0;
+        for (const City &ct : cities) own += ct.owner == ci;
+        for (const Unit &u : units) mil += u.owner == ci && is_military(u.type);
+        for (const City &ct : cities) {
+            if (mil <= 3 * own + 4) break;
+            if (ct.owner != ci) continue;
+            int weakest = -1, guards = 0;
+            for (const Unit &u : units) {
+                if (u.owner != ci || u.x != ct.x || u.y != ct.y || !is_military(u.type) || unit_info(u.type).domain != Domain::Land) continue;
+                ++guards;
+                if (unit_info(u.type).attack > unit_info(u.type).defense) continue;   // attackers resting here march again
+                if (weakest < 0 || unit_info(u.type).defense < unit_info(unit(weakest)->type).defense) weakest = u.id;
+            }
+            if (guards > (ct.size >= 7 ? 3 : 2) && weakest >= 0) {
+                disband(weakest);
+                --mil;
+            }
+        }
     }
     std::vector<int> ids;
     for (const Unit &u : units) {
