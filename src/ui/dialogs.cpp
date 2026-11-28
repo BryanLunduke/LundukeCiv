@@ -923,10 +923,13 @@ void App::draw_science(cairo_t *cr, Dialog &d)
     const double L = x + 24, R = x + w - 24;
     // Future Techs come on top of the advances, not out of them.
     const std::string future = c.future > 0 ? " and " + std::to_string(c.future) + (c.future == 1 ? " Future Tech" : " Future Techs") : "";
-    text(cr, kUiFont, "The " + c.name + " know " + std::to_string(g().techs_known(me) - c.future) + " of " + std::to_string(kAdvanceCount) +
-                          " advances" + future + ". The next one costs " + std::to_string(g().research_cost(me)) + " bulbs.",
-         L, cy, kSlateDim, 1.0, static_cast<int>(R - L));
-    cy += 22;
+    {
+        const std::string know = "The " + c.name + " know " + std::to_string(g().techs_known(me) - c.future) + " of " +
+                                 std::to_string(kAdvanceCount) + " advances" + future + ". The next one costs " +
+                                 std::to_string(g().research_cost(me)) + " bulbs.";
+        text(cr, kUiFont, know, L, cy, kSlateDim, 1.0, static_cast<int>(R - L));
+        cy += measure(cr, kUiFont, know, static_cast<int>(R - L)).h + 6;
+    }
     {
         // The DOS formula, spelled out: known x bulbs per advance, x2 in AD.
         const bool ad = year_for_turn(g().turn) > 0;
@@ -937,8 +940,8 @@ void App::draw_science(cairo_t *cr, Dialog &d)
         if (g().tech_catchup) f += ", " + std::to_string(g().tech_catchup) + " of it catch-up";
         if ((ad ? 2 : 1) * (known * ratio + 1) < Game::kMinResearchCost)
             f += " \u00b7 at least " + std::to_string(Game::kMinResearchCost);
-        text(cr, kUiFont, f, L, cy, kSlateDim);
-        cy += 24;
+        text(cr, kUiFont, f, L, cy, kSlateDim, 1.0, static_cast<int>(R - L));
+        cy += measure(cr, kUiFont, f, static_cast<int>(R - L)).h + 8;
     }
     if (c.research != Advance::None) {
         text(cr, kBoldFont, std::string("Researching ") + advance_info(c.research).name, L, cy, kSlateGold);
@@ -1054,7 +1057,7 @@ void App::draw_revolution(cairo_t *cr, Dialog &d)
 {
     const int me = human();
     const Civ &c = g().civs[me];
-    const double w = 560, h = 470, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
+    const double w = 560, h = 500, x = (geo_.win_w - w) / 2, y = (geo_.win_h - h) / 2;
     double cy = dialog_frame(cr, x, y, w, h, d.title);
     const double L = x + 24, R = x + w - 24;
     if (c.govt == Government::Anarchy) {
@@ -1062,11 +1065,11 @@ void App::draw_revolution(cairo_t *cr, Dialog &d)
                               government_info(c.target).name + ".", L, cy, kSlateInk, 1.0, static_cast<int>(R - L));
     } else {
         const bool pyramids = g().wonder_active(me, Wonder::Pyramids);
-        text(cr, kUiFont, std::string("You rule by ") + government_info(c.govt).name + ". A revolution now brings " +
-                              turns_text(g().anarchy_turns(me)) + " of Anarchy before the new government" +
-                              (pyramids ? " (the Pyramids keep it short)." : " (one to four turns, ending on every fourth turn)."),
-             L, cy, kSlateDim, 1.0, static_cast<int>(R - L));
-        cy += 50;
+        const std::string intro = std::string("You rule by ") + government_info(c.govt).name + ". A revolution now brings " +
+                                  turns_text(g().anarchy_turns(me)) + " of Anarchy before the new government" +
+                                  (pyramids ? " (the Pyramids keep it short)." : " (one to four turns, ending on every fourth turn).");
+        text(cr, kUiFont, intro, L, cy, kSlateDim, 1.0, static_cast<int>(R - L));
+        cy += measure(cr, kUiFont, intro, static_cast<int>(R - L)).h + 16;
         for (int gv = static_cast<int>(Government::Despotism); gv < static_cast<int>(Government::Count); ++gv) {
             const Government gg = static_cast<Government>(gv);
             const GovernmentInfo &gi = government_info(gg);

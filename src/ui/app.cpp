@@ -452,8 +452,12 @@ void App::collect_news(bool report)
             // A mixed turn (war, then a stolen advance) takes its title from
             // the good news, not from the first line.
             const char *t = m.kind == MsgKind::Tech ? "Science" : (m.kind == MsgKind::Bad ? "Bad News" : "Good News");
-            if (popup_title.empty() || (popup_title == "Bad News" && m.kind != MsgKind::Bad) ||
-                (popup_title == "Good News" && m.kind == MsgKind::Tech))
+            if (popup_title.empty()) popup_title = t;
+            else if (popup_title != t && (popup_title == "Bad News" || t == "Bad News") && t != "Science" && popup_title != "Science")
+                popup_title = "News";   // war and a stolen secret in the same report
+            else if (popup_title == "Bad News" && m.kind != MsgKind::Bad)
+                popup_title = t;
+            else if (popup_title == "Good News" && m.kind == MsgKind::Tech)
                 popup_title = t;
         }
     }
